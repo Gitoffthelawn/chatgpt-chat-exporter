@@ -1,0 +1,2961 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const { JSDOM } = require('jsdom');
+const engine = require('../src/extraction-engine.js');
+const userscriptUi = require('../src/userscript-ui.js');
+const progressOverlay = require('../src/progress-overlay.js');
+
+const repoRoot = path.resolve(__dirname, '..');
+
+function readScript(filename) {
+    return fs.readFileSync(path.join(repoRoot, filename), 'utf8');
+}
+
+function readFixture(filename) {
+    return fs.readFileSync(path.join(repoRoot, 'test', 'fixtures', filename), 'utf8');
+}
+
+function chatGptFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Modern ChatGPT Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Can you export this code table and math example for me please?</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <p>The inline mean is
+                <span class="katex">
+                    <span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">\\mu</annotation></semantics></math></span>
+                    <span class="katex-html">mu</span>
+                </span>
+                and the density is below.
+            </p>
+            <span class="katex-display">
+                <span class="katex">
+                    <span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">f(x \\mid \\mu)</annotation></semantics></math></span>
+                    <span class="katex-html">visual duplicate</span>
+                </span>
+            </span>
+            <pre>
+                <div class="sticky top-0"><div>JavaScript</div><button aria-label="Copy">Copy</button></div>
+                <div class="cm-editor">
+                    <div class="cm-content">
+                        <div class="cm-line">function hi() {</div>
+                        <div class="cm-line">  return "ok";</div>
+                        <div class="cm-line">}</div>
+                    </div>
+                </div>
+            </pre>
+            <table>
+                <thead><tr><th>Name</th><th>Value</th></tr></thead>
+                <tbody><tr><td>alpha</td><td>1</td></tr></tbody>
+            </table>
+            <p>See <a href="https://example.com/a)b">Example [link]</a>.</p>
+            <img alt="plot">
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
+function geminiFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Gemini Fixture</title></head>
+<body>
+    <main>
+        <user-query>
+            <p>Please export this Gemini code table and linked source for me.</p>
+        </user-query>
+        <model-response>
+            <p>Certainly, here is a compact Gemini answer with code, table, and media.</p>
+            <pre><code class="language-python">print("hello")
+print("world")</code></pre>
+            <table>
+                <tr><th>Tool</th><th>Status</th></tr>
+                <tr><td>Gemini</td><td>Current</td></tr>
+            </table>
+            <a href="https://gemini.google.com/">Gemini home</a>
+            <canvas aria-label="chart"></canvas>
+        </model-response>
+    </main>
+</body>
+</html>`;
+}
+
+function fenceInjectionFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Fence Injection Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Please show a code block that contains markdown fences.</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <pre>
+                <div class="code-header">JavaScript \`\`\` bad</div>
+                <code>const start = "ok";
+\`\`\`
+const done = true;</code>
+            </pre>
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
+function issue25Fixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Newline character example</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <div class="whitespace-pre-wrap">What is \\n ?
+Show me a 5-line example.
+
+Make no mistakes.
+    return indented;</div>
+        </div>
+        <div data-message-author-role="assistant">
+            <div class="markdown prose">
+                <p><code>\\n</code> is the <strong>newline character</strong> (also called a <strong>line feed</strong>, LF).</p>
+                <p>Inline backticks like <code>a\`b</code> need longer delimiters.</p>
+                <p>Escape &amp;amp; as <code>&amp;amp;</code> and &amp;lt;div&amp;gt; stays literal.</p>
+                <pre><code><span>Line 1</span><br><span>Line 2</span><br><span>Line 3</span></code></pre>
+                <table>
+                    <tr><th>Sequence</th><th>Path</th></tr>
+                    <tr><td>\\n</td><td>C:\\temp | D:\\data</td></tr>
+                </table>
+            </div>
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
+function issue32And33Fixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Attachment Metadata Fixture</title></head>
+<body>
+    <main>
+        <section data-testid="conversation-turn-0">
+            <div data-message-author-role="user" data-message-id="message-user-image">
+                <div class="whitespace-pre-wrap"></div>
+            </div>
+            <div data-testid="file-thumbnail">
+                <img
+                    alt="uploaded-sketch.png"
+                    src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                >
+            </div>
+            <button data-testid="file-thumbnail" aria-label="Uploaded_Filename.zip">Uploaded_Filename.zip</button>
+            <time datetime="2026-06-09T12:47:00-06:00">Tue, Jun 9 at 12:47 PM</time>
+        </section>
+        <section data-testid="conversation-turn-1">
+            <div data-message-author-role="assistant" data-message-id="message-assistant-file">
+                <div class="markdown prose"><p>Created the requested workbook.</p></div>
+            </div>
+            <a data-testid="generated-file" href="sandbox:/mnt/data/ABC_Workbook.xlsx">Download ABC Workbook</a>
+            <div data-testid="reasoning-recap">Checked the formulas before saving.</div>
+            <time datetime="2026-06-09T12:48:00-06:00">Tue, Jun 9 at 12:48 PM</time>
+        </section>
+    </main>
+</body>
+</html>`;
+}
+
+function chatGptConversationPayload() {
+    return {
+        title: 'Payload Metadata Fixture',
+        current_node: 'node-assistant',
+        mapping: {
+            'node-user': {
+                id: 'node-user',
+                parent: null,
+                children: ['node-recap'],
+                message: {
+                    id: 'message-user-api',
+                    author: { role: 'user' },
+                    create_time: 1781030820,
+                    content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-image-api' }] },
+                    metadata: {
+                        attachments: [{ id: 'file-image-api', name: 'uploaded-diagram.png', mime_type: 'image/png' }]
+                    }
+                }
+            },
+            'node-recap': {
+                id: 'node-recap',
+                parent: 'node-user',
+                children: ['node-assistant'],
+                message: {
+                    id: 'message-recap-api',
+                    author: { role: 'assistant' },
+                    create_time: 1781030870,
+                    content: { content_type: 'reasoning_recap', parts: ['Checked workbook formulas and output paths.'] },
+                    metadata: {}
+                }
+            },
+            'node-assistant': {
+                id: 'node-assistant',
+                parent: 'node-recap',
+                children: [],
+                message: {
+                    id: 'message-assistant-api',
+                    author: { role: 'assistant' },
+                    create_time: 1781030880,
+                    content: {
+                        content_type: 'text',
+                        parts: ['Created the workbook. [Download the ABC Workbook](sandbox:/mnt/data/ABC_Workbook.xlsx)']
+                    },
+                    metadata: {}
+                }
+            }
+        }
+    };
+}
+
+function installInnerText(window) {
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, 'innerText');
+    if (!descriptor) {
+        Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
+            get() {
+                return this.textContent;
+            },
+            set(value) {
+                this.textContent = value;
+            }
+        });
+    }
+}
+
+async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fixture') {
+    const dom = new JSDOM(html, {
+        url,
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+
+    const { window } = dom;
+    installInnerText(window);
+
+    const downloads = [];
+    window.URL.createObjectURL = blob => {
+        downloads.push({ blob, filename: null });
+        return `blob:download-${downloads.length}`;
+    };
+    window.URL.revokeObjectURL = () => {};
+    window.alert = () => {};
+    window.console = console;
+    window.HTMLAnchorElement.prototype.click = function click() {
+        const latest = downloads[downloads.length - 1];
+        if (latest) latest.filename = this.download;
+    };
+
+    window.eval(readScript(filename));
+
+    // Runners export through the async full-extraction path, which waits for
+    // the newest answer to stop growing before it reads anything — poll for the
+    // download rather than assuming a fixed number of ticks.
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+
+    assert.ok(downloads.length > 0, `${filename} should create a downloadable blob`);
+    const latest = downloads[downloads.length - 1];
+    return {
+        filename: latest.filename,
+        content: await latest.blob.text()
+    };
+}
+
+const SHARE_UI_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header><button id="header-share"><span>Share</span></button></header>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem"><svg aria-hidden="true"></svg><span>Share</span></button>
+        <button role="menuitem"><span>Rename</span></button>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+</body>
+</html>`;
+
+// An account with sharing disabled by policy: no header share control and no
+// Share entry in the conversation menu (issue #31).
+const NO_SHARE_UI_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header><button id="header-menu"><span>Open menu</span></button></header>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem" data-testid="rename-chat-menu-item"><span>Rename</span></button>
+        <button role="menuitem" data-testid="delete-chat-menu-item"><span>Delete</span></button>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+    <div data-message-author-role="assistant"><div class="markdown"><p>Hi there</p></div></div>
+</body>
+</html>`;
+
+function installUserscriptUi(options = {}) {
+    const dom = new JSDOM(options.markup || SHARE_UI_FIXTURE, {
+        url: 'https://chatgpt.com/c/ui-fixture',
+        pretendToBeVisual: true
+    });
+    const { window } = dom;
+    window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({
+        top: 10,
+        right: 200,
+        bottom: 40,
+        left: 100,
+        width: 100,
+        height: 30
+    });
+
+    const calls = [];
+    options.beforeInstall?.(window.document);
+    // With a real engine the install uses its own export actions, which is what
+    // the busy-state behaviour is about; otherwise record the calls.
+    const stubActions = options.engine ? {} : {
+        copyLink: async () => calls.push('copy'),
+        exportMarkdown: () => calls.push('markdown'),
+        exportPdf: () => calls.push('pdf')
+    };
+    userscriptUi.install({
+        document: window.document,
+        engine: options.engine || {},
+        launcherDelay: 0,
+        syncInterval: 0,
+        ...stubActions
+    });
+    window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+    return { dom, window, calls };
+}
+
+test('userscript integrates Markdown and PDF actions into ChatGPT conversation menus', () => {
+    const { window, calls } = installUserscriptUi();
+    const menu = window.document.querySelector('#conversation-menu');
+    const labels = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(item => item.textContent.trim());
+
+    assert.deepEqual(labels, ['Share', 'Export to Markdown', 'Export to PDF', 'Rename']);
+    assert.equal(window.document.querySelector('#chatgpt-export-markdown-btn'), null);
+    assert.equal(window.document.querySelector('#chatgpt-export-pdf-btn'), null);
+
+    menu.querySelector('[data-chat-exporter-item="markdown"]').click();
+    menu.querySelector('[data-chat-exporter-item="pdf"]').click();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('userscript injects into a previously mounted menu when ChatGPT reveals it', async () => {
+    const { window } = installUserscriptUi();
+    const menu = window.document.createElement('div');
+    menu.id = 'lazy-conversation-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.innerHTML = '<button id="native-share" role="menuitem" aria-haspopup="dialog" aria-controls="share-dialog"><span>Share</span></button>';
+    menu.getClientRects = () => menu.hidden ? [] : [{ width: 100, height: 30 }];
+    window.document.body.appendChild(menu);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.equal(menu.querySelector('[data-chat-exporter-item]'), null);
+    menu.hidden = false;
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    const exportItems = Array.from(menu.querySelectorAll('[data-chat-exporter-item]'));
+    assert.deepEqual(exportItems.map(item => item.textContent), ['Export to Markdown', 'Export to PDF']);
+    assert.ok(exportItems.every(item => !item.id && !item.hasAttribute('aria-controls') && !item.hasAttribute('aria-haspopup')));
+    assert.equal(window.document.querySelectorAll('#native-share').length, 1);
+});
+
+test('userscript turns the header Share into a menu with native share, copy, Markdown, and PDF', async () => {
+    const { window, calls } = installUserscriptUi();
+    window.document.querySelector('#header-share').click();
+
+    const menu = window.document.querySelector('#chat-exporter-share-menu');
+    assert.ok(menu);
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    assert.deepEqual(items.map(item => item.textContent), ['Share…', 'Copy link', 'Export to Markdown', 'Export to PDF']);
+
+    items[1].click();
+    await Promise.resolve();
+    assert.deepEqual(calls, ['copy']);
+
+    window.document.body.click();
+    window.document.querySelector('#header-share').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(3)').click();
+    assert.deepEqual(calls, ['copy', 'markdown']);
+
+    window.document.querySelector('#header-share').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(4)').click();
+    assert.deepEqual(calls, ['copy', 'markdown', 'pdf']);
+});
+
+test('userscript Share… item passes the click through to ChatGPT\'s native share', () => {
+    const { window } = installUserscriptUi();
+    const shareButton = window.document.querySelector('#header-share');
+    let nativeClicks = 0;
+    shareButton.addEventListener('click', () => {
+        nativeClicks += 1;
+    });
+
+    shareButton.click();
+    assert.equal(nativeClicks, 0, 'intercepted click must not reach the native handler');
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'));
+
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]').click();
+    assert.equal(nativeClicks, 1, 'Share… must re-click the native button unintercepted');
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript finds the header share button by data-testid regardless of locale', () => {
+    const { window } = installUserscriptUi();
+    const localized = window.document.createElement('button');
+    localized.id = 'localized-share';
+    localized.setAttribute('data-testid', 'share-chat-button');
+    localized.innerHTML = '<span>Compartir</span>';
+    window.document.body.appendChild(localized);
+
+    localized.click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
+        'share menu should open from the localized button via its data-testid');
+    window.document.body.click();
+});
+
+// Live ChatGPT (observed 2026-08-05): the header carries
+// `share-chat-button` next to `conversation-options-button`, while every user
+// turn carries its own `share-prompt-link-turn-action-button`.
+const LIVE_CHATGPT_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header>
+        <div data-testid="thread-header-right-actions">
+            <button data-testid="share-chat-button"><span>Share</span></button>
+            <button data-testid="conversation-options-button"><span>More</span></button>
+        </div>
+    </header>
+    <main>
+        <section data-testid="conversation-turn-1">
+            <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+            <button data-testid="share-prompt-link-turn-action-button" aria-label="Share prompt"></button>
+        </section>
+        <section data-testid="conversation-turn-2">
+            <div data-message-author-role="assistant"><div class="markdown"><p>Hi there</p></div></div>
+        </section>
+    </main>
+</body>
+</html>`;
+
+// Live ChatGPT hides the conversation menu's Share row on wide viewports
+// (class "sm:hidden") because the header Share button takes over there.
+const HIDDEN_SHARE_MENU_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header>
+        <button data-testid="share-chat-button"><span>Share</span></button>
+        <div id="menu-trigger" aria-haspopup="menu" aria-expanded="true">More</div>
+    </header>
+    <div id="conversation-menu" role="menu" aria-labelledby="menu-trigger" data-radix-menu-content>
+        <div role="menuitem" class="__menu-item sm:hidden" data-testid="share-chat-menu-item"><svg class="icon"></svg><span>Share</span></div>
+        <div role="menuitem" class="__menu-item"><svg class="icon"></svg><span>View files in chat</span></div>
+        <div role="menuitem" class="__menu-item"><svg class="icon"></svg><span>Archive</span></div>
+        <div role="menuitem" class="__menu-item" data-testid="delete-chat-menu-item"><svg class="icon"></svg><span>Delete</span></div>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+</body>
+</html>`;
+
+function hideElement(element) {
+    element.getClientRects = () => [];
+}
+
+test('export items reach a conversation menu whose Share row is hidden on desktop', () => {
+    const { window, calls } = installUserscriptUi({
+        markup: HIDDEN_SHARE_MENU_FIXTURE,
+        beforeInstall: doc => hideElement(doc.querySelector('[data-testid="share-chat-menu-item"]'))
+    });
+
+    const menu = window.document.querySelector('#conversation-menu');
+    const labels = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(item => item.textContent.trim());
+    assert.deepEqual(labels, ['Share', 'Export to Markdown', 'Export to PDF', 'View files in chat', 'Archive', 'Delete']);
+
+    const clones = Array.from(menu.querySelectorAll('[data-chat-exporter-item]'));
+    assert.ok(clones.every(clone => !clone.className.includes('sm:hidden')),
+        'clones must come from a row that renders, not from the hidden Share entry');
+    assert.ok(clones.every(clone => clone.querySelector('svg')?.getAttribute('viewBox') === '0 0 24 24'),
+        'cloned rows carry our glyph inside ChatGPT\'s own svg element');
+
+    clones[0].click();
+    clones[1].click();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('sidebar conversation menus are left alone', () => {
+    const { window } = installUserscriptUi({
+        markup: `<!DOCTYPE html>
+<html>
+<body>
+    <nav>
+        <a href="/c/other-conversation">Another chat</a>
+        <div id="sidebar-trigger" aria-haspopup="menu" aria-expanded="true">More</div>
+    </nav>
+    <div id="sidebar-menu" role="menu" aria-labelledby="sidebar-trigger">
+        <div role="menuitem" data-testid="share-chat-menu-item"><span>Share</span></div>
+        <div role="menuitem" data-testid="delete-chat-menu-item"><span>Delete</span></div>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+</body>
+</html>`
+    });
+
+    assert.equal(window.document.querySelector('[data-chat-exporter-item]'), null,
+        'a sidebar row\'s menu would export the open conversation, not its own');
+});
+
+test('per-turn share buttons keep their native behaviour', () => {
+    const { window } = installUserscriptUi({ markup: LIVE_CHATGPT_FIXTURE });
+    const turnShare = window.document.querySelector('[data-testid="share-prompt-link-turn-action-button"]');
+    let nativeClicks = 0;
+    turnShare.addEventListener('click', () => {
+        nativeClicks += 1;
+    });
+
+    turnShare.click();
+    assert.equal(nativeClicks, 1, '"Share prompt" shares that message, not the conversation — never intercept it');
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+
+    window.document.querySelector('[data-testid="share-chat-button"]').click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
+        'the header share button still opens the export menu');
+});
+
+test('per-turn share buttons do not count as a native share control', async () => {
+    const { window } = installUserscriptUi({ markup: LIVE_CHATGPT_FIXTURE });
+    window.document.querySelector('[data-testid="share-chat-button"]').remove();
+    window.document.body.appendChild(window.document.createElement('span'));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.ok(window.document.querySelector('#chat-exporter-launcher'),
+        'a turn-level share button must not suppress the launcher');
+});
+
+test('userscript mounts a floating launcher when the account exposes no share control (issue #31)', () => {
+    const { window, calls } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    assert.ok(launcher, 'accounts without a share control still need an export entry point');
+    assert.notEqual(launcher.style.display, 'none');
+
+    launcher.click();
+    const menu = window.document.querySelector('#chat-exporter-share-menu');
+    assert.ok(menu, 'the launcher opens the export menu');
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    assert.deepEqual(items.map(item => item.textContent), ['Copy link', 'Export to Markdown', 'Export to PDF'],
+        'Share… is omitted when there is no native share dialog to hand off to');
+
+    items[1].click();
+    assert.deepEqual(calls, ['markdown']);
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript launcher toggles its menu closed on a second click', () => {
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    launcher.click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'));
+    launcher.click();
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript keeps the launcher hidden while ChatGPT shows its own share control', async () => {
+    const { window } = installUserscriptUi();
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null,
+        'the native menus are enough while a share control exists');
+
+    window.document.querySelector('#header-share').remove();
+    window.document.querySelector('#conversation-menu').remove();
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+    assert.ok(launcher, 'the launcher appears once the share control disappears');
+
+    const restored = window.document.createElement('button');
+    restored.setAttribute('data-testid', 'share-chat-button');
+    restored.appendChild(window.document.createTextNode('Compartir'));
+    window.document.body.appendChild(restored);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.equal(launcher.style.display, 'none', 'the launcher steps aside when the native control returns');
+});
+
+test('userscript builds menu icons without innerHTML so strict CSP pages keep working', () => {
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    assert.ok(launcher.querySelector('svg'), 'the launcher renders a parsed SVG icon');
+    launcher.click();
+    const icons = window.document.querySelectorAll('#chat-exporter-share-menu [role="menuitem"] svg');
+    assert.equal(icons.length, 3);
+    assert.ok(Array.from(icons).every(icon => icon.namespaceURI === 'http://www.w3.org/2000/svg'));
+});
+
+test('cloned conversation-menu items are relabelled and drop ChatGPT test ids', () => {
+    // A localized menu: the share item is found by data-testid, and its label
+    // must still be replaced rather than repeated three times.
+    const { window } = installUserscriptUi({ markup: `<!DOCTYPE html>
+<html>
+<body>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem" data-testid="share-chat-menu-item"><span data-testid="share-label">Compartir</span></button>
+    </div>
+</body>
+</html>` });
+
+    const clones = Array.from(window.document.querySelectorAll('[data-chat-exporter-item]'));
+    assert.deepEqual(clones.map(item => item.textContent), ['Export to Markdown', 'Export to PDF']);
+    assert.equal(window.document.querySelectorAll('[data-testid="share-chat-menu-item"]').length, 1);
+    assert.equal(window.document.querySelectorAll('[data-testid="share-label"]').length, 1);
+});
+
+test('a running export says so and refuses to start a second sweep', async () => {
+    let started = 0;
+    let release;
+    const engineStub = {
+        exportConversationFull: () => {
+            started += 1;
+            return new Promise(resolve => { release = resolve; });
+        }
+    };
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE, engine: engineStub });
+
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+    const clickExport = async () => {
+        launcher.click();
+        window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+        await new Promise(resolve => window.setTimeout(resolve, 0));
+    };
+
+    await clickExport();
+    assert.equal(started, 1);
+    assert.equal(launcher.querySelector('span').textContent, 'Exporting…', 'the launcher shows the sweep is running');
+
+    await clickExport();
+    assert.equal(started, 1, 'a second click does not start a competing sweep');
+
+    release({});
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    assert.equal(launcher.querySelector('span').textContent, 'Export', 'the label goes back when the export finishes');
+});
+
+test('userscript exposes a console fallback for exporting', () => {
+    const { window, calls } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+
+    assert.equal(typeof window.ChatExporter.markdown, 'function');
+    window.ChatExporter.markdown();
+    window.ChatExporter.pdf();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('userscript leaves an empty chat page alone until it has messages', async () => {
+    const { window } = installUserscriptUi({ markup: `<!DOCTYPE html>
+<html><body><header><button id="new-chat"><span>New chat</span></button></header></body></html>` });
+
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null,
+        'nothing to export yet, so no launcher');
+
+    const message = window.document.createElement('div');
+    message.setAttribute('data-message-author-role', 'user');
+    window.document.body.appendChild(message);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.ok(window.document.querySelector('#chat-exporter-launcher'),
+        'the launcher appears as soon as the conversation has messages');
+});
+
+test('ChatExporter.showLauncher() forces the launcher on even next to a native share control', async () => {
+    const { window } = installUserscriptUi();
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null);
+
+    const launcher = window.ChatExporter.showLauncher();
+    assert.ok(launcher);
+
+    window.document.body.appendChild(window.document.createElement('span'));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    assert.notEqual(window.document.querySelector('#chat-exporter-launcher').style.display, 'none',
+        'a forced launcher survives later DOM churn');
+});
+
+// An enterprise-style page: a real conversation, but no share control anywhere
+// because the account has sharing disabled by policy.
+const ENTERPRISE_PAGE = `<!DOCTYPE html>
+<html>
+<head><title>Enterprise Conversation</title></head>
+<body>
+    <header><button id="new-chat"><span>New chat</span></button></header>
+    <main>
+        <div data-message-author-role="user"><p>Does the export button still work here?</p></div>
+        <div data-message-author-role="assistant"><p>It should, through the floating launcher.</p></div>
+    </main>
+</body>
+</html>`;
+
+async function runUserscript(html, options = {}) {
+    const dom = new JSDOM(html, {
+        url: 'https://chatgpt.com/c/enterprise-fixture',
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+
+    const { window } = dom;
+    installInnerText(window);
+    window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({
+        top: 10, right: 200, bottom: 40, left: 100, width: 100, height: 30
+    });
+
+    const downloads = [];
+    window.URL.createObjectURL = blob => {
+        downloads.push({ blob, filename: null });
+        return `blob:download-${downloads.length}`;
+    };
+    window.URL.revokeObjectURL = () => {};
+    window.alert = () => {};
+    window.console = console;
+    window.HTMLAnchorElement.prototype.click = function click() {
+        const latest = downloads[downloads.length - 1];
+        if (latest) latest.filename = this.download;
+    };
+
+    // Pages that enforce `require-trusted-types-for 'script'` turn every HTML
+    // sink into a throwing setter; the userscript must never touch one.
+    if (options.trustedTypes) {
+        const blocked = () => {
+            throw new TypeError("This document requires 'TrustedHTML' assignment.");
+        };
+        Object.defineProperty(window.Element.prototype, 'innerHTML', { set: blocked, get: () => '' });
+        Object.defineProperty(window.Element.prototype, 'outerHTML', { set: blocked, get: () => '' });
+        window.Element.prototype.insertAdjacentHTML = blocked;
+        window.document.write = blocked;
+    }
+
+    window.eval(readScript(options.script || 'chatgpt-markdown-exporter.user.js'));
+
+    // The launcher waits for ChatGPT's header to settle before deciding that no
+    // native share control exists.
+    const deadline = Date.now() + 5000;
+    let launcher = null;
+    while (!launcher && Date.now() < deadline) {
+        await new Promise(resolve => window.setTimeout(resolve, 50));
+        launcher = window.document.querySelector('#chat-exporter-launcher');
+    }
+    return { window, downloads, launcher };
+}
+
+async function exportFromLauncher(window, launcher, downloads) {
+    launcher.click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+}
+
+test('built userscript exports end to end on an account with no share control (issue #31)', async () => {
+    const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE);
+    assert.ok(launcher, 'the userscript must expose an export control without ChatGPT sharing');
+
+    await exportFromLauncher(window, launcher, downloads);
+
+    assert.equal(downloads.length, 1, 'clicking Export to Markdown downloads the conversation');
+    const content = await downloads[0].blob.text();
+    assert.match(content, /Does the export button still work here\?/);
+    assert.match(content, /It should, through the floating launcher\./);
+    assert.match(downloads[0].filename, /\.md$/);
+});
+
+test('built userscript installs and exports on a page that enforces Trusted Types', async () => {
+    const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE, { trustedTypes: true });
+    assert.ok(launcher, 'strict CSP must not stop the export UI from mounting');
+
+    await exportFromLauncher(window, launcher, downloads);
+
+    assert.equal(downloads.length, 1);
+    assert.match(await downloads[0].blob.text(), /Does the export button still work here\?/);
+});
+
+// ── Progress overlay ────────────────────────────────────────────────────────
+// It is drawn into a page the exporter is simultaneously reading, on
+// deployments that enforce Trusted Types, for a large number of installed
+// users. Each test below is a way that could go wrong.
+
+function progressPage() {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Progress</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="p1"><p>A question worth exporting today.</p></div>
+        <div data-message-author-role="assistant" data-message-id="p2"><p>An answer worth exporting today.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/progress' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+    return dom;
+}
+
+test('the progress card builds without any HTML injection sink', () => {
+    const dom = progressPage();
+    const blocked = () => { throw new Error('Trusted Types blocked this assignment'); };
+    Object.defineProperty(dom.window.Element.prototype, 'innerHTML', { set: blocked, get: () => '' });
+    Object.defineProperty(dom.window.Element.prototype, 'outerHTML', { set: blocked, get: () => '' });
+    dom.window.Element.prototype.insertAdjacentHTML = blocked;
+    dom.window.document.write = blocked;
+
+    const card = progressOverlay.create(dom.window.document);
+    card.onProgress({ phase: 'sweep', percent: 40, messages: 3, lines: 12, lastSender: 'You', lastPreview: 'hello' });
+
+    const node = dom.window.document.getElementById(progressOverlay.CONTAINER_ID);
+    assert.ok(node, 'the card must mount where innerHTML throws');
+    assert.match(node.textContent, /3 messages/);
+    assert.match(node.textContent, /12 lines/);
+    card.destroy();
+    assert.equal(dom.window.document.getElementById(progressOverlay.CONTAINER_ID), null);
+});
+
+test('the progress card is never captured as a message by the export it is watching', async () => {
+    const dom = progressPage();
+    const card = progressOverlay.create(dom.window.document);
+    card.onProgress({ phase: 'sweep', percent: 50, messages: 1, lines: 4, lastSender: 'You', lastPreview: 'A question worth exporting' });
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false
+    });
+
+    assert.equal(conversation.messages.length, 2, 'the card must not become a third message');
+    const exported = engine.serializers.markdown(conversation);
+    assert.ok(!exported.includes('Chat Exporter'), 'no part of our own UI may reach the reader\'s file');
+    assert.ok(!exported.includes('Reading conversation'), 'nor its status text');
+    card.destroy();
+});
+
+// The structural protection is that the card lives outside the conversation
+// container. This guard is what saves the day someone moves it inside — which
+// is exactly the kind of change that looks harmless in review.
+test('anything marked as exporter UI is refused even where a message would be taken', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>UI Inside</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="real"><p>A genuine message in the conversation.</p></div>
+        <div data-chat-exporter-ui="progress">
+            <div data-message-author-role="assistant"><p>Reading conversation… 14 messages captured so far.</p></div>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/ui-inside' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 1, 'only the real message is exported');
+    assert.match(conversation.messages[0].content, /A genuine message/);
+    assert.ok(!engine.serializers.markdown(conversation).includes('Reading conversation'));
+});
+
+test('an export survives a progress listener that throws on every event', async () => {
+    const dom = progressPage();
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false,
+        onProgress: () => { throw new Error('progress UI exploded'); }
+    });
+
+    assert.equal(conversation.messages.length, 2, 'a broken UI must never cost the reader their export');
+});
+
+test('progress events report the phases and the content being read', async () => {
+    const dom = progressPage();
+    const events = [];
+
+    await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false,
+        onProgress: event => events.push(event)
+    });
+
+    const phases = events.map(event => event.phase);
+    assert.ok(phases.includes('start'), 'the reader learns it started');
+    assert.ok(phases.includes('done'), 'and that it finished');
+
+    const done = events[events.length - 1];
+    assert.equal(done.phase, 'done');
+    assert.equal(done.messages, 2);
+    assert.ok(done.lines > 0, 'lines read are reported');
+    assert.equal(done.complete, true);
+    assert.ok(done.lastPreview.length > 0, 'the last captured message is shown');
+    assert.ok(!done.lastPreview.includes('<'), 'the preview is plain text, not markup');
+});
+
+test('a page with no body still exports rather than failing on the card', async () => {
+    const dom = progressPage();
+    const detached = dom.window.document.implementation.createHTMLDocument('no body');
+    detached.documentElement.removeChild(detached.body);
+    const card = progressOverlay.create(detached);
+    assert.doesNotThrow(() => card.onProgress({ phase: 'sweep', messages: 1 }));
+    assert.doesNotThrow(() => card.destroy());
+});
+
+test('built Markdown exporter mounts the progress card and cleans it up', async () => {
+    const dom = new JSDOM(chatGptFixture(), {
+        url: 'https://chatgpt.com/c/progress-runner',
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+    const { window } = dom;
+    installInnerText(window);
+
+    const seen = [];
+    const downloads = [];
+    window.URL.createObjectURL = blob => { downloads.push(blob); return 'blob:x'; };
+    window.URL.revokeObjectURL = () => {};
+    window.alert = () => {};
+    window.console = console;
+    window.HTMLAnchorElement.prototype.click = function click() {};
+
+    // Watch for the card while the sweep is in flight.
+    const watcher = setInterval(() => {
+        if (window.document.getElementById('chat-exporter-progress')) seen.push(true);
+    }, 5);
+
+    window.eval(readScript('exporter-markdown.js'));
+
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    clearInterval(watcher);
+
+    assert.ok(downloads.length > 0, 'the export still downloads');
+    assert.ok(seen.length > 0, 'the card was visible during the export');
+    assert.ok(!(await downloads[0].text()).includes('Chat Exporter'),
+        'the card never reaches the exported file');
+});
+
+test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, links, and media', async () => {
+    const { content } = await runExporter('exporter-markdown.js', chatGptFixture());
+
+    assert.match(content, /```javascript\nfunction hi\(\) \{\n  return "ok";\n\}\n```/);
+    assert.match(content, /\$\\mu\$/);
+    assert.match(content, /\$\$f\(x \\mid \\mu\)\$\$/);
+    assert.match(content, /\| Name \| Value \|/);
+    assert.match(content, /\| alpha \| 1 \|/);
+    assert.match(content, /\[Example \\\[link\\\]\]\(https:\/\/example\.com\/a%29b\)/);
+    assert.match(content, /\[Image: plot\]/);
+    assert.doesNotMatch(content, /\\\\mu/);
+});
+
+test('markdown export preserves prompt line breaks and never doubles backslashes (issue #25)', async () => {
+    const { content } = await runExporter('exporter-markdown.js', issue25Fixture());
+
+    // User prompt: newlines, blank lines, and indentation survive verbatim.
+    assert.ok(content.includes('What is \\n ?\nShow me a 5-line example.\n\nMake no mistakes.\n    return indented;'),
+        `pre-wrap prompt should keep its line structure, got:\n${content}`);
+
+    // Inline code keeps backslashes verbatim.
+    assert.ok(content.includes('`\\n` is the **newline character**'));
+    assert.equal(content.includes('\\\\n'), false, 'backslashes must not be doubled anywhere');
+
+    // Inline code containing backticks uses a longer delimiter, not fake escapes.
+    assert.ok(content.includes('``a`b``'));
+    assert.equal(content.includes('\\`'), false);
+
+    // Code blocks built from <br>-separated lines keep one line per line.
+    assert.match(content, /```\nLine 1\nLine 2\nLine 3\n```/);
+
+    // Literal entity text is not un-escaped into different characters.
+    assert.ok(content.includes('Escape &amp; as `&amp;`'));
+    assert.ok(content.includes('&lt;div&gt; stays literal'));
+
+    // Table cells escape pipes but leave backslashes alone.
+    assert.ok(content.includes('| \\n | C:\\temp \\| D:\\data |'));
+});
+
+test('shared engine preserves pre-wrap prompts routed through inline styles', () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Styled fixture</title></head><body><main>
+    <div data-message-author-role="user">
+        <div style="white-space: pre-wrap">first line
+second line</div>
+    </div>
+    <div data-message-author-role="assistant"><p>Understood, exporting both lines now.</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/styled' });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(result.messages[0].content, 'first line\nsecond line');
+});
+
+test('image-only turns keep embedded media and turn-level metadata (issues #32, #33)', () => {
+    const dom = new JSDOM(issue32And33Fixture(), {
+        url: 'https://chatgpt.com/c/attachment-metadata'
+    });
+    installInnerText(dom.window);
+
+    const markdownConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(markdownConversation.messages.length, 2, 'an image-only user turn must not be rejected as empty');
+    assert.equal(markdownConversation.messages[0].sender, 'You');
+    assert.match(markdownConversation.messages[0].content, /!\[uploaded-sketch\.png\]\(data:image\/png;base64,/);
+    assert.match(markdownConversation.messages[0].content, /\[File: Uploaded_Filename\.zip\]/);
+    assert.equal(markdownConversation.messages[0].timestamp, 'Tue, Jun 9 at 12:47 PM');
+    assert.equal(markdownConversation.messages[0].timestampIso, '2026-06-09T18:47:00.000Z');
+
+    const assistant = markdownConversation.messages[1];
+    assert.match(assistant.content, /\[File: ABC Workbook\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+    assert.match(assistant.content, /Checked the formulas before saving\./);
+    assert.equal(assistant.timestamp, 'Tue, Jun 9 at 12:48 PM');
+
+    const rendered = engine.serializers.markdown(markdownConversation);
+    assert.match(rendered, /### \*\*You\*\* · Tue, Jun 9 at 12:47 PM/);
+    assert.equal((rendered.match(/Tue, Jun 9 at 12:47 PM/g) || []).length, 1,
+        'turn timestamps are metadata, not duplicated in message content');
+
+    const htmlConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'html'
+    });
+    assert.match(htmlConversation.messages[0].content, /<img class="exported-media" src="data:image\/png;base64,/);
+    assert.match(engine.serializers.html(htmlConversation), /<time datetime="2026-06-09T18:47:00\.000Z">Tue, Jun 9 at 12:47 PM<\/time>/);
+});
+
+test('built Markdown exporter captures an image-only turn end to end (issue #33)', async () => {
+    const { content } = await runExporter('exporter-markdown.js', issue32And33Fixture());
+
+    assert.match(content, /### \*\*You\*\* · Tue, Jun 9 at 12:47 PM/);
+    assert.match(content, /!\[uploaded-sketch\.png\]\(data:image\/png;base64,/);
+    assert.match(content, /\[File: Uploaded_Filename\.zip\]/);
+    assert.match(content, /\[File: ABC Workbook\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+});
+
+test('ChatGPT payload enrichment adds timestamps, attachments, generated files, and visible reasoning (issue #32)', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload Fixture</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-user-api"><p>Review the uploaded diagram please.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-assistant-api"><p>Created the workbook.</p></div>
+    </main></body></html>`, {
+        url: 'https://chatgpt.com/c/conversation-api'
+    });
+    installInnerText(dom.window);
+
+    const requested = [];
+    dom.window.fetch = async input => {
+        const url = String(input);
+        requested.push(url);
+        if (url.includes('/backend-api/conversation/conversation-api')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'application/json' },
+                json: async () => chatGptConversationPayload()
+            };
+        }
+        if (url.includes('/backend-api/files/download/file-image-api')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'image/png' },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer
+            };
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        sourceFromPayload: false
+    });
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
+    assert.ok(conversation.messages[0].timestamp, 'a localized per-turn timestamp is rendered');
+    assert.match(conversation.messages[0].content, /!\[uploaded-diagram\.png\]\(data:image\/png;base64,iVBORw==\)/);
+
+    assert.equal(conversation.messages[1].timestampIso, new Date(1781030880 * 1000).toISOString());
+    assert.match(conversation.messages[1].content, /\[File: ABC_Workbook\.xlsx\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.ok(requested.some(url => url.includes('/backend-api/files/download/file-image-api')),
+        'image bytes are embedded from the authenticated file endpoint');
+    assert.equal(conversation.metadataStatus, 'enriched');
+});
+
+// ChatGPT refuses an unauthenticated read of a conversation the reader owns
+// with 404 "conversation_inaccessible" — the same status a deleted
+// conversation returns — so a retry keyed on 401/403 never fired and every
+// export lost its metadata behind a red console 404.
+function chatGptBackendStub(options = {}) {
+    const {
+        token = 'session-access-token',
+        requiredAccountId = '',
+        accountIds = [],
+        payload = chatGptConversationPayload(),
+        conversationStatus = null
+    } = options;
+
+    const calls = [];
+    const headersOf = map => ({ get: name => map[String(name).toLowerCase()] ?? null });
+    const json = (status, body) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        headers: headersOf({ 'content-type': 'application/json' }),
+        json: async () => body
+    });
+    const refused = () => json(404, {
+        detail: {
+            message: 'Log in to view this conversation.',
+            code: 'conversation_inaccessible',
+            can_retry: false
+        }
+    });
+
+    const fetch = async (input, init = {}) => {
+        const url = String(input);
+        const headers = init.headers || {};
+        calls.push({ url, headers });
+
+        if (url.includes('/api/auth/session')) {
+            return json(200, token ? { accessToken: token, user: { id: 'reader' } } : { expires: '2099-01-01' });
+        }
+
+        if (url.includes('/backend-api/accounts/check/')) {
+            const accounts = {};
+            accountIds.forEach((id, index) => {
+                accounts[`workspace-${index}`] = { account: { account_id: id } };
+            });
+            accounts.default = { account: { account_id: 'personal-account' } };
+            return json(200, { accounts });
+        }
+
+        if (url.includes('/backend-api/conversation/')) {
+            if (conversationStatus) return json(conversationStatus.status, conversationStatus.body);
+            if (headers.Authorization !== `Bearer ${token}`) return refused();
+            if (requiredAccountId && headers['ChatGPT-Account-Id'] !== requiredAccountId) return refused();
+            return json(200, payload);
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    return { fetch, calls, conversationCalls: () => calls.filter(call => call.url.includes('/backend-api/conversation/')) };
+}
+
+function payloadDom(url = 'https://chatgpt.com/c/conversation-api') {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload Fixture</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-user-api"><p>Review the uploaded diagram please.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-assistant-api"><p>Created the workbook.</p></div>
+    </main></body></html>`, { url });
+    installInnerText(dom.window);
+    return dom;
+}
+
+// These exercise the DOM sweep and the payload repairs layered on top of it —
+// the path taken whenever the stored conversation is unavailable. Markdown now
+// prefers the payload outright, so this pins the fallback explicitly rather
+// than testing whichever path happens to be default.
+function extractWithBackend(dom, extra = {}) {
+    return engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        maxEmbeddedImageBytes: 4096,
+        sourceFromPayload: false,
+        ...extra
+    });
+}
+
+test('a 404 "conversation_inaccessible" is an auth failure, not a missing conversation', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched',
+        'the page bearer token must be used, not waited for behind a 401 that never comes');
+    assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
+    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+
+    const unauthenticated = backend.conversationCalls().filter(call => !call.headers.Authorization);
+    assert.equal(unauthenticated.length, 0,
+        'a cookie-only attempt can only 404 — it must not be made, because the reader sees it as a console error');
+});
+
+test('no signed-in session means no doomed request to the private API', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({ token: '' });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2, 'the DOM export is unaffected by missing metadata');
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.conversationCalls().length, 0);
+});
+
+test('a genuinely missing conversation does not trigger the auth escalation', async () => {
+    const dom = payloadDom('https://chatgpt.com/c/deleted-conversation');
+    const backend = chatGptBackendStub({
+        conversationStatus: { status: 404, body: { detail: { code: 'conversation_not_found', message: 'Not found' } } }
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.conversationCalls().length, 1, 'one attempt, then stop — the conversation really is gone');
+    assert.ok(!backend.calls.some(call => call.url.includes('/accounts/check/')),
+        'workspace enumeration is for refused reads, not for missing conversations');
+});
+
+test('a workspace conversation is read with the account the reader acts as', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({
+        requiredAccountId: 'workspace-account-id',
+        accountIds: ['workspace-account-id']
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    assert.ok(backend.conversationCalls().some(call => call.headers['ChatGPT-Account-Id'] === 'workspace-account-id'),
+        'a Team/Enterprise conversation belongs to the workspace, not to the personal account');
+});
+
+test('file downloads authenticate to chatgpt.com and never leak the token to the CDN', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+    const calls = backend.calls;
+    const cdnUrl = 'https://files.oaiusercontent.com/file-image-api?signature=abc';
+
+    dom.window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.includes('/backend-api/files/download/')) {
+            calls.push({ url, headers: init.headers || {} });
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'application/json' : null) },
+                json: async () => ({ status: 'success', download_url: cdnUrl })
+            };
+        }
+        if (url === cdnUrl) {
+            calls.push({ url, headers: init.headers || {}, credentials: init.credentials });
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer
+            };
+        }
+        return backend.fetch(input, init);
+    };
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.match(conversation.messages[0].content, /!\[uploaded-diagram\.png\]\(data:image\/png;base64,iVBORw==\)/);
+
+    const download = calls.find(call => call.url.includes('/backend-api/files/download/'));
+    assert.ok(download?.headers.Authorization, 'the private file endpoint needs the same bearer token');
+
+    const cdn = calls.find(call => call.url === cdnUrl);
+    assert.ok(cdn, 'the signed download link is followed');
+    assert.ok(!cdn.headers.Authorization,
+        'the signed link is a third-party host — sending the bearer token there would hand over the reader session');
+    assert.equal(cdn.credentials, 'omit');
+});
+
+// ── Payload-first Markdown ──────────────────────────────────────────────────
+// The payload is the markdown the model produced; the DOM is a rendering of it.
+// Reading the source avoids every scraping artifact and needs no scroll sweep.
+
+test('Markdown is read from the payload without touching the page', async () => {
+    // A page holding only the two newest turns, as a virtualizer would leave it.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload First</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="p5"><p>Only the newest turns are mounted.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/payload-first' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['p1','p2','p3','p4','p5','p6']) });
+    dom.window.fetch = backend.fetch;
+
+    // No scroll container is even offered — the payload path must not need one.
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.equal(conversation.source, 'payload');
+    assert.equal(conversation.messages.length, 6, 'the whole conversation, not the mounted fragment');
+    assert.equal(conversation.complete, true);
+    assert.equal(conversation.unreachedMessages, 0);
+    assert.ok(conversation.messages.every(message => message.source === 'payload'));
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user','assistant','user','assistant','user','assistant']);
+    assert.ok(conversation.messages.every(message => message.timestampIso),
+        'every message carries the payload timestamp');
+});
+
+test('ChatGPT citation markers become sources, not private-use garbage', async () => {
+    // Live payloads wrap citation markers in U+E200…U+E201. Rendered naively
+    // they appear as "citeturn1search0" mid-sentence.
+    const payload = payloadWithMessages(['c1', 'c2']);
+    payload.mapping['node-c2'].message.content.parts = [
+        'The repository corroborates this.\uE200cite\uE202turn1search0\uE201 That settles it.'
+    ];
+    payload.mapping['node-c2'].message.metadata.content_references = [{
+        matched_text: '\uE200cite\uE202turn1search0\uE201',
+        type: 'grouped_webpages',
+        items: [{ title: 'PROV-O: The PROV Ontology', url: 'https://www.w3.org/TR/prov-o/?utm_source=chatgpt.com' }]
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.ok(!/[\uE200-\uE20F]/.test(body), 'no private-use marker survives');
+    assert.ok(!body.includes('cite'), 'no raw marker text');
+    assert.match(body, /\[PROV-O: The PROV Ontology\]\(https:\/\/www\.w3\.org\/TR\/prov-o/,
+        'the citation reads as its real title — better than the DOM pill');
+    assert.match(body, /\*\*References:\*\*/, 'and is listed as a source');
+});
+
+// The private-use range must be written as an escaped range. Written with
+// literal characters it can collapse into a class that also matches "-", which
+// silently turns "grep-based" into "grepbased" throughout an export — a
+// corruption no structural check would catch.
+test('stripping citation markers never eats ordinary punctuation', async () => {
+    const payload = payloadWithMessages(['h1', 'h2']);
+    payload.mapping['node-h2'].message.content.parts = [
+        'A one-line digest beat grep-based search in the Pre-Registered study.\uE200cite\uE202turn0search1\uE201'
+    ];
+    payload.mapping['node-h2'].message.metadata.content_references = [{
+        matched_text: '\uE200cite\uE202turn0search1\uE201', items: []
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.match(body, /one-line digest beat grep-based search in the Pre-Registered study\./,
+        `hyphens must survive marker stripping, got: ${body}`);
+    assert.ok(!/[\uE200-\uE20F]/.test(body), 'the marker itself is gone');
+});
+
+test('an image-only turn survives the payload path', async () => {
+    // payloadContentText yields '' for a multimodal part, which used to drop the
+    // message entirely.
+    const payload = payloadWithMessages(['i1', 'i2']);
+    payload.mapping['node-i1'].message.content = {
+        content_type: 'multimodal_text',
+        parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-shot' }]
+    };
+    payload.mapping['node-i1'].message.metadata.attachments = [
+        { id: 'file-shot', name: 'screenshot.png', mime_type: 'image/png' }
+    ];
+
+    const dom = payloadDom();
+    dom.window.fetch = async (input, init) => {
+        if (String(input).includes('/backend-api/files/download/')) {
+            return { ok: true, status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer };
+        }
+        return chatGptBackendStub({ payload }).fetch(input, init);
+    };
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.equal(conversation.messages.length, 2, 'the image-only turn is not dropped');
+    assert.match(conversation.messages[0].content, /!\[screenshot\.png\]\(data:image\/png;base64,/);
+});
+
+test('the DOM sweep takes over whenever the payload cannot', async () => {
+    const cases = [
+        ['a shared link has no stored conversation', 'https://chatgpt.com/share/abc', {}],
+        ['HTML needs rendered markup, not markdown', 'https://chatgpt.com/c/html-case', { format: 'html' }],
+        ['metadata explicitly disabled', 'https://chatgpt.com/c/off-case', { chatGptMetadata: false }],
+        ['payload source explicitly disabled', 'https://chatgpt.com/c/opt-out', { sourceFromPayload: false }]
+    ];
+
+    for (const [why, url, extra] of cases) {
+        const dom = payloadDom(url);
+        dom.window.fetch = chatGptBackendStub().fetch;
+        const conversation = await engine.extractConversationFull({
+            document: dom.window.document, provider: 'chatgpt', format: 'markdown',
+            scroll: false, awaitStreaming: false, ...extra
+        });
+        assert.equal(conversation.source, 'dom', why);
+        assert.ok(conversation.messages.length > 0, `${why}: still exports`);
+    }
+});
+
+test('a refused payload falls back and is not requested twice', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({
+        conversationStatus: { status: 404, body: { detail: { code: 'conversation_not_found' } } }
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown',
+        scroll: false, awaitStreaming: false
+    });
+
+    assert.equal(conversation.source, 'dom');
+    assert.equal(conversation.messages.length, 2, 'the page still exports');
+    assert.equal(backend.conversationCalls().length, 1,
+        'the fallback reuses what the first attempt learned rather than asking again');
+});
+
+test('a conversation inside a project is read by its own id', async () => {
+    const dom = payloadDom('https://chatgpt.com/g/g-p-68a1b2c3d4e5-workspace/c/conversation-api');
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    const requested = backend.conversationCalls().map(call => call.url);
+    assert.ok(requested.every(url => url.endsWith('/backend-api/conversation/conversation-api')),
+        'the gizmo segment is part of the page route, not of the conversation id');
+});
+
+test('a shared link has no stored conversation to read, and asks for none', async () => {
+    const dom = payloadDom('https://chatgpt.com/share/e7c9a1b2-1111-2222-3333-444455556666');
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2, 'a shared page still exports from the DOM');
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.calls.length, 0,
+        'no conversation id means no request at all — not a request that can only fail');
+});
+
+test('the file endpoint reports failure as HTTP 200 with an error envelope', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+
+    dom.window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.includes('/backend-api/files/download/')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'application/json' : null) },
+                json: async () => ({ status: 'error', error_code: 'file_not_found', error_type: 'GetDownloadLinkError', error_message: null })
+            };
+        }
+        return backend.fetch(input, init);
+    };
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    assert.match(conversation.messages[0].content, /\[Image: uploaded-diagram\.png\]/,
+        'a 200 that carries an error envelope must fall back to the placeholder, not embed the envelope');
+    assert.ok(!conversation.messages[0].content.includes('data:image'),
+        'no image bytes ever arrived');
+});
+
+// The payload is the only source that knows how many messages a conversation
+// actually has. A sweep that stops early can capture every turn it saw and
+// still be short — the pre-0.9.6 check could not see that.
+function payloadWithMessages(ids) {
+    const mapping = {};
+    ids.forEach((id, index) => {
+        mapping[`node-${id}`] = {
+            id: `node-${id}`,
+            parent: index === 0 ? null : `node-${ids[index - 1]}`,
+            children: index === ids.length - 1 ? [] : [`node-${ids[index + 1]}`],
+            message: {
+                id,
+                author: { role: index % 2 === 0 ? 'user' : 'assistant' },
+                create_time: 1781030820 + index,
+                content: { content_type: 'text', parts: [`Message body number ${index}.`] },
+                metadata: {}
+            }
+        };
+    });
+    return { title: 'Ground Truth', current_node: `node-${ids[ids.length - 1]}`, mapping };
+}
+
+test('an export short of the conversation is not reported as complete', async () => {
+    // The page holds two turns; the conversation has six. Nothing about the two
+    // in the DOM looks wrong — they capture cleanly.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Truncated</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="m5"><p>The fifth message in this conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="m6"><p>The sixth message in this conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/truncated' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom, { recoverMissing: false });
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.expectedMessages, 6);
+    assert.equal(conversation.unreachedMessages, 4, 'm1..m4 were never encountered by the sweep');
+    assert.equal(conversation.missedMessages, 0, 'nothing mounted-but-unreadable — the old check saw a clean run');
+    assert.equal(conversation.complete, false, 'a short export must not claim to be complete');
+});
+
+test('messages the sweep could not reach are recovered from the payload', async () => {
+    // The real failure this comes from: a sweep stalled at 85% of a long
+    // conversation and shipped without its last two messages. They were not
+    // mis-read — they were never in the DOM, so there was nothing to re-read.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="m5"><p>The fifth message in this conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="m6"><p>The sixth message in this conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.recoveredMessages, 4);
+    assert.equal(conversation.messages.length, 6, 'the export holds the whole conversation');
+    assert.equal(conversation.unreachedMessages, 0);
+    assert.equal(conversation.complete, true, 'nothing is missing, so nothing is warned about');
+
+    // Recovered messages take their true position rather than being appended.
+    const bodies = conversation.messages.map(message => message.content);
+    assert.match(bodies[0], /Message body number 0\./);
+    assert.match(bodies[4], /The fifth message in this conversation\./);
+    assert.match(bodies[5], /The sixth message in this conversation\./);
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant', 'user', 'assistant'],
+        'recovered messages keep the conversation alternating correctly');
+    assert.deepEqual(conversation.messages.map(message => message.index), [0, 1, 2, 3, 4, 5]);
+});
+
+// A real export came out with message 25 ahead of message 24 — same timestamp,
+// swapped. The sweep orders by scroll offset measured at capture time, and a
+// virtualizer that changes heights between those moments makes neighbours
+// compare wrongly.
+// Live ChatGPT (2026-08-17) labels every turn with <h4 class="sr-only
+// select-none">ChatGPT said:</h4>, sized 1x1px and positioned off-screen. It is
+// invisible to a reader and was reaching every exported message as a redundant
+// "#### ChatGPT said:" heading.
+// ChatGPT renders an inline citation as a favicon plus a label inside one <a>.
+// Media is serialized before links, so the link text already held
+// "![Image](data:image/png;base64,…)" — escaping that into the link produced
+// `[!\[Image\](data:…)Label](url)`, which is not a link at all but a wall of
+// base64 shown as visible text.
+// ── Math across renderers ───────────────────────────────────────────────────
+test('TeX is recovered from every renderer that carries it', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Math</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="m1">
+            <p>KaTeX inline <span class="katex"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">\\alpha</annotation></semantics></math></span><span class="katex-html">alpha-visual</span></span> here.</p>
+            <p>MathJax v3 <mjx-container><mjx-assistive-mml><math><semantics><annotation encoding="application/x-tex">\\beta</annotation></semantics></math></mjx-assistive-mml></mjx-container> here.</p>
+            <p>Attribute source <span data-latex="\\gamma">gamma-visual</span> here.</p>
+            <p>MathJax v2 <script type="math/tex">\\delta<\/script> here.</p>
+            <span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span><span class="katex-html">display-visual</span></span></span>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/math' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.match(body, /\$\\alpha\$/, 'KaTeX annotation');
+    assert.match(body, /\$\\beta\$/, 'MathJax v3 assistive MathML');
+    assert.match(body, /\$\\gamma\$/, 'data-latex attribute');
+    assert.match(body, /\$\\delta\$/, 'MathJax v2 script');
+    assert.match(body, /\$\$E = mc\^2\$\$/, 'display math uses $$');
+
+    // The rendered-for-the-eye copy must never survive alongside the source.
+    ['alpha-visual', 'gamma-visual', 'display-visual'].forEach(visual =>
+        assert.ok(!body.includes(visual), `visual duplicate ${visual} leaked into the export`));
+});
+
+// Live Gemini (2026-08-18) renders KaTeX with .katex-html ALONE — no
+// .katex-mathml, no <annotation>, no MathML at all — and keeps the TeX in a
+// data-math attribute on the wrapper *around* the render. 42 formulas in one
+// message, all recovered.
+test('Gemini maths export as TeX from the wrapper that carries it', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Math - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query><div class="query-text">Explain the model.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>The switch condition is
+                    <span data-math="C_s + pD &lt; C_r"><span class="katex"><span class="katex-html" aria-hidden="true">Cs+pD&lt;Cr</span></span></span>
+                    in equilibrium.</p>
+                <div class="math-block" data-math="W_s = -C_s + \\delta [p(V - D) + (1 - p)\\Pi_s]">
+                    <span class="katex-display"><span class="katex"><span class="katex-html" aria-hidden="true">Ws=−Cs+δ[p(V−D)+(1−p)Πs]</span></span></span>
+                </div>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/math' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'gemini', format: 'markdown'
+    }).messages[1].content;
+
+    assert.match(body, /\$C_s \+ pD < C_r\$/, 'inline maths use single $');
+    assert.match(body, /\$\$W_s = -C_s \+ \\delta \[p\(V - D\) \+ \(1 - p\)\\Pi_s\]\$\$/,
+        'the block is display maths, from the wrapper attribute');
+    // The rendered glyph soup must not survive alongside the source.
+    assert.ok(!body.includes('Cs+pD'), `visual KaTeX glyphs leaked: ${body}`);
+});
+
+test('a formula with only a visual copy is kept, not deleted', () => {
+    // The v0.11.0 de-duplication removed .katex-html whenever no TeX was found.
+    // Gemini has no MathML beside it, so that would have emptied every formula
+    // in the export rather than de-duplicating anything.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Only Visual</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="v1">
+            <p>The bound is <span class="katex"><span class="katex-html" aria-hidden="true">x &lt; y</span></span> here.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/only-visual' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.match(body, /x < y/, `the only copy of the formula must survive, got: ${body}`);
+});
+
+test('math with no TeX source appears once, not twice', () => {
+    // KaTeX emits an accessible MathML copy and a visual copy. With no
+    // annotation to recover, serializing both reads "f(x)f(x)".
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>No TeX</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="n1">
+            <p>The density <span class="katex"><span class="katex-mathml"><math><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo></math></span><span class="katex-html">f(x)</span></span> is shown.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/no-tex' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.equal((body.match(/f\(x\)/g) || []).length, 1, `formula should appear once, got: ${body}`);
+});
+
+// ── Variants (regenerated / edited turns) ───────────────────────────────────
+function payloadWithVariant() {
+    const payload = payloadWithMessages(['v1', 'v2']);
+    // An earlier answer to v1 that was replaced by regenerating.
+    payload.mapping['node-old'] = {
+        id: 'node-old', parent: 'node-v1', children: [],
+        message: {
+            id: 'old-answer', author: { role: 'assistant' }, create_time: 1781030821,
+            content: { content_type: 'text', parts: ['The first attempt at an answer.'] }, metadata: {}
+        }
+    };
+    payload.mapping['node-v1'].children = ['node-v2', 'node-old'];
+    return payload;
+}
+
+test('earlier versions of regenerated turns are left out by default', async () => {
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithVariant() }).fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.variantMessages, 0);
+    assert.equal(conversation.availableVariants, 1, 'the export knows one exists');
+    assert.ok(!engine.serializers.markdown(conversation).includes('The first attempt at an answer.'),
+        'existing exports must not silently change shape');
+});
+
+test('includeVariants adds earlier versions, labelled and in place', async () => {
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithVariant() }).fetch;
+
+    const conversation = await extractWithBackend(dom, { includeVariants: true });
+
+    assert.equal(conversation.variantMessages, 1);
+    const variant = conversation.messages.find(message => message.variant);
+    assert.ok(variant, 'the replaced answer is present');
+    assert.match(variant.content, /Earlier version \(replaced by a regeneration or edit\)/);
+    assert.match(variant.content, /The first attempt at an answer\./);
+    assert.equal(variant.senderType, 'assistant');
+    assert.deepEqual(conversation.messages.map(message => message.index),
+        conversation.messages.map((_, index) => index), 'indexes stay contiguous');
+});
+
+test('a citation chip exports as its label, not a wall of base64', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Citation</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="c1">
+            <p>The repository corroborates this claim.
+            <a href="https://metamcp.org/reference/contributing?utm_source=chatgpt.com"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" alt="">MetaMCP+1</a></p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/citation' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    const body = conversation.messages[0].content;
+
+    assert.match(body, /\[MetaMCP\+1\]\(https:\/\/metamcp\.org\/reference\/contributing/,
+        'the citation reads as its label');
+    assert.ok(!body.includes('!\\['), 'no escaped image markdown left inside a link');
+    assert.ok(!body.includes('data:image'), 'the favicon does not become visible text');
+});
+
+test('a link that is only an image keeps the image and stays a link', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Image Link</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="i1">
+            <p>See the chart below for the breakdown of results.
+            <a href="https://example.com/report"><img src="https://example.com/chart.png" alt="Quarterly chart"></a></p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/image-link' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    const body = conversation.messages[0].content;
+
+    assert.match(body, /\[!\[Quarterly chart\]\(https:\/\/example\.com\/chart\.png\)\]\(https:\/\/example\.com\/report\)/,
+        'an image-only link nests properly instead of losing the picture');
+    assert.ok(!body.includes('\\!'), 'our own generated syntax is not escaped');
+});
+
+test('screen-reader-only labels never reach the export', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>SR Only</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="sr1">
+            <h4 class="sr-only select-none">You said:</h4>
+            <p>What is the deployment order?</p>
+        </div>
+        <div data-message-author-role="assistant" data-message-id="sr2">
+            <h4 class="sr-only select-none">ChatGPT said:</h4>
+            <p>Drain the queue first.</p>
+            <h3>What the runbook said:</h3>
+            <p>It said to drain the queue.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/sr-only' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+
+    const exported = engine.serializers.markdown(conversation);
+    assert.ok(!exported.includes('You said:'), 'the sr-only label is chrome, not content');
+    assert.ok(!exported.includes('ChatGPT said:'));
+    assert.match(exported, /What is the deployment order\?/);
+    assert.match(exported, /Drain the queue first\./);
+
+    // Matched by class, not by text: a real heading that happens to end in
+    // "said:" is untouched.
+    assert.match(exported, /### What the runbook said:/);
+    assert.match(exported, /It said to drain the queue\./);
+});
+
+test('a recovered message carries the timestamp from the payload', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered TS</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="t2"><p>The message that was on screen.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered-ts' });
+    installInnerText(dom.window);
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithMessages(['t1', 't2']) }).fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.recoveredMessages, 1);
+    const recovered = conversation.messages.find(message => message.recovered);
+    assert.ok(recovered.timestampIso, 'a recovered message is not the only one without a timestamp');
+    assert.ok(recovered.timestamp);
+    assert.equal(recovered.timestampIso, new Date(1781030820 * 1000).toISOString());
+});
+
+test('payload order corrects a pair the sweep captured out of order', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Swapped</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="s1"><p>Message body number 0.</p></div>
+        <div data-message-author-role="assistant" data-message-id="s4"><p>Message body number 3.</p></div>
+        <div data-message-author-role="user" data-message-id="s3"><p>Message body number 2.</p></div>
+        <div data-message-author-role="assistant" data-message-id="s2"><p>Message body number 1.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/swapped' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['s1', 's2', 's3', 's4']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 4);
+    assert.equal(conversation.recoveredMessages, 0, 'nothing was missing — only the order was wrong');
+    assert.deepEqual(conversation.messages.map(message => message.content.match(/number (\d)/)[1]),
+        ['0', '1', '2', '3'], 'the conversation reads in the order it actually happened');
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.deepEqual(conversation.messages.map(message => message.index), [0, 1, 2, 3]);
+});
+
+test('payload order is not imposed when it cannot account for every message', async () => {
+    // A message the payload does not know about (a branch the DOM shows but the
+    // active chain omits) means the payload is not a complete ordering, so the
+    // sweep's own order stands rather than being half-rewritten.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Partial</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="k1"><p>Message body number 0.</p></div>
+        <div data-message-author-role="assistant" data-message-id="unknown-to-payload"><p>An answer the payload chain omits entirely.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/partial' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['k1', 'k2']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom, { recoverMissing: false });
+
+    assert.equal(conversation.messages.length, 2);
+    assert.match(conversation.messages[0].content, /Message body number 0\./);
+    assert.match(conversation.messages[1].content, /the payload chain omits entirely/);
+});
+
+test('a recovered message is escaped in HTML exports', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered HTML</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="h2"><p>The message that was on screen.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered-html' });
+    installInnerText(dom.window);
+
+    const payload = payloadWithMessages(['h1', 'h2']);
+    payload.mapping['node-h1'].message.content.parts = ['Watch out for <script>alert(1)</script> & friends.'];
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'html',
+        scroll: false, awaitStreaming: false, sourceFromPayload: false
+    });
+
+    assert.equal(conversation.recoveredMessages, 1);
+    const html = engine.serializers.html(conversation);
+    assert.ok(html.includes('&lt;script&gt;'), 'payload text is escaped, never injected as markup');
+    assert.ok(!html.includes('<script>alert(1)</script>'));
+});
+
+test('deliberate dedupe of identical turns is not mistaken for a missing message', async () => {
+    // Two turns with byte-identical content collapse to one by design
+    // (contentHash). Counting messages would call that a missing message;
+    // counting encountered ids does not.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Dedupe</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="d1"><p>Exactly the same message text here.</p></div>
+        <div data-message-author-role="user" data-message-id="d2"><p>Exactly the same message text here.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/dedupe' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['d1', 'd2']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 1, 'identical turns collapse, as designed');
+    assert.equal(conversation.expectedMessages, 2);
+    assert.equal(conversation.unreachedMessages, 0,
+        'both ids were seen — the sweep reached everything, so this is not incompleteness');
+    assert.equal(conversation.complete, true);
+});
+
+test('ChatGPT metadata enrichment is bounded and never blocks the DOM export', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Metadata Timeout</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-timeout-user"><p>Keep this prompt even if metadata stalls.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-timeout-assistant"><p>Keep this response too.</p></div>
+    </main></body></html>`, {
+        url: 'https://chatgpt.com/c/metadata-timeout'
+    });
+
+    dom.window.fetch = (input, init = {}) => new Promise((resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        metadataMaxDuration: 25
+    });
+
+    assert.ok(Date.now() - started < 1000, 'metadata uses its own short wall-clock budget');
+    assert.equal(conversation.messages.length, 2);
+    assert.match(conversation.messages[0].content, /Keep this prompt/);
+    assert.match(conversation.messages[1].content, /Keep this response/);
+});
+
+test('exports omit exact source URLs by default while keeping provider labels', async () => {
+    const sourceUrl = 'https://chatgpt.com/c/private-share?model=gpt-5';
+    const markdown = await runExporter('exporter-markdown.js', chatGptFixture(), sourceUrl);
+    const html = await runExporter('exporter-html.js', chatGptFixture(), sourceUrl);
+    const pdfReady = await runExporter('exporter-pdf.js', chatGptFixture(), sourceUrl);
+
+    assert.equal(markdown.content.includes(sourceUrl), false);
+    assert.match(markdown.content, /\*\*Source:\*\* chatgpt\.com/);
+    assert.doesNotMatch(markdown.content, /\*\*Source:\*\* \[chatgpt\.com\]\(/);
+
+    assert.equal(html.content.includes(sourceUrl), false);
+    assert.match(html.content, /<strong>Source:<\/strong> chatgpt\.com/);
+
+    assert.equal(pdfReady.content.includes(sourceUrl), false);
+    assert.match(pdfReady.content, /<strong>Source:<\/strong> chatgpt\.com/);
+});
+
+test('shared engine includes exact source URL only when explicitly requested', () => {
+    const sourceUrl = 'https://chatgpt.com/c/private-share?model=gpt-5';
+    const dom = new JSDOM(chatGptFixture(), { url: sourceUrl });
+    installInnerText(dom.window);
+
+    const defaultConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const defaultMarkdown = engine.serializers.markdown(defaultConversation);
+
+    assert.equal(defaultConversation.sourceUrl, '');
+    assert.equal(defaultMarkdown.includes(sourceUrl), false);
+    assert.match(defaultMarkdown, /\*\*Source:\*\* chatgpt\.com/);
+
+    const optInConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        includeSourceUrl: true
+    });
+    const optInMarkdown = engine.serializers.markdown(optInConversation);
+
+    assert.equal(optInConversation.sourceUrl, sourceUrl);
+    assert.equal(optInMarkdown.includes(`**Source:** [chatgpt.com](${sourceUrl})`), true);
+});
+
+test('Markdown code blocks use sanitized info strings and fences longer than code content', async () => {
+    const { content } = await runExporter('exporter-markdown.js', fenceInjectionFixture());
+
+    assert.match(content, /````javascriptbad\nconst start = "ok";\n```\nconst done = true;\n````/);
+    assert.doesNotMatch(content, /```javascript ``` bad/);
+});
+
+test('shared engine serializes live-observed ChatGPT shapes from synthetic fixture', () => {
+    const dom = new JSDOM(readFixture('chatgpt-live-shapes.html'), {
+        url: 'https://chatgpt.com/c/live-shapes'
+    });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(result.provider, 'chatgpt');
+    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages[0].sender, 'You');
+    assert.equal(result.messages[1].sender, 'ChatGPT');
+
+    const content = result.messages[1].content;
+    assert.match(content, /## Audit Heading/);
+    assert.match(content, /\*\*Bold\*\*/);
+    assert.match(content, /\*italic\*/);
+    assert.match(content, /\$\\sigma\^2\$/);
+    assert.match(content, /\$\$y=x\^2\$\$/);
+    assert.match(content, /```typescript\nconst value = 1;\nconsole\.log\(value\);\n```/);
+    assert.match(content, /\| Feature \| Status \| Notes \|/);
+    assert.match(content, /- Parent item/);
+    assert.match(content, /\n  - Child item/);
+    assert.match(content, /> Quoted synthetic result\./);
+    assert.match(content, /\[Doc \\\[A\\\]\]\(https:\/\/example\.com\/a%29b\)/);
+    assert.match(content, /\[File: sample-report\.csv\]/);
+    assert.match(content, /\[Artifact: audit-notes\.md\]/);
+    assert.match(content, /\[Image: synthetic chart\]/);
+});
+
+test('ChatGPT HTML exporter restores structured code and table markup', async () => {
+    const { content } = await runExporter('exporter-html.js', chatGptFixture());
+
+    assert.match(content, /<pre><code class="language-javascript">function hi\(\) \{\n  return &quot;ok&quot;;\n\}<\/code><\/pre>/);
+    assert.doesNotMatch(content, /&lt;pre&gt;&lt;code&gt;/);
+    assert.match(content, /<table><tr><th>Name<\/th><th>Value<\/th><\/tr><tr><td>alpha<\/td><td>1<\/td><\/tr><\/table>/);
+    assert.match(content, /\$\\mu\$/);
+});
+
+test('ChatGPT PDF-ready exporter keeps printable code and table elements', async () => {
+    const { content } = await runExporter('exporter-pdf.js', chatGptFixture());
+
+    assert.match(content, /<pre class="code-block"><div class="code-language">javascript<\/div><code>function hi\(\) \{\n  return &quot;ok&quot;;\n\}<\/code><\/pre>/);
+    assert.match(content, /<table><tr><th>Name<\/th><th>Value<\/th><\/tr><tr><td>alpha<\/td><td>1<\/td><\/tr><\/table>/);
+    assert.doesNotMatch(content, /\[CODE\]/);
+});
+
+// Live Gemini (observed 2026-08-17) wraps each exchange in a single
+// div.conversation-container holding one user-query and one model-response.
+// Treating that wrapper as the turn scope would hand both messages to
+// selectContentRoot, which ranks candidates by text length — the pair would
+// win and every answer would be prefixed with its own question.
+function geminiPairContainerFixture() {
+    return `<!DOCTYPE html><html><head><title>Pair Container - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query><div class="query-text">First question about the deployment pipeline.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>First answer describing the deployment pipeline.</p>
+            </div></message-content></model-response>
+        </div>
+        <div class="conversation-container">
+            <user-query><div class="query-text">Second question about rollback safety.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>Second answer describing rollback safety.</p>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`;
+}
+
+test('the selector doctor reports a healthy page and names the drift on an unhealthy one', async () => {
+    const healthy = new JSDOM(readFixture('chatgpt-live-shapes.html'), { url: 'https://chatgpt.com/c/doctor-fixture' });
+    installInnerText(healthy.window);
+    healthy.window.fetch = async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}) });
+
+    const good = await engine.diagnose({ document: healthy.window.document, provider: 'chatgpt' });
+    assert.equal(good.provider, 'chatgpt');
+    assert.ok(good.messagesFound > 0);
+    assert.equal(good.messageSelectors[0].valid, good.messagesFound,
+        'the preferred selector is the one carrying the page');
+    assert.ok(!good.warnings.some(warning => warning.includes('Falling back')));
+
+    // The failure this exists to catch: the data-attribute selector stops
+    // matching, an older class-based entry quietly takes over, and exports keep
+    // working until it too disappears.
+    const drifted = new JSDOM(`<!DOCTYPE html><html><head><title>Drifted</title></head><body><main>
+        <div class="group/conversation-turn"><p>A question long enough to count as a real message.</p></div>
+        <div class="group/conversation-turn"><p>An answer long enough to count as a real message.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/drift-fixture' });
+    installInnerText(drifted.window);
+    drifted.window.fetch = async () => null;
+
+    const bad = await engine.diagnose({ document: drifted.window.document, provider: 'chatgpt' });
+    assert.equal(bad.messageSelectors[0].valid, 0, 'the preferred data-attribute selector no longer matches');
+    assert.ok(bad.messagesFound > 0, 'the export still works, which is what makes the drift silent');
+    assert.ok(bad.warnings.some(warning => /Falling back to selector #4/.test(warning)),
+        'the doctor must name the fallback rather than report a clean bill of health');
+});
+
+// Modelled on a real conversation: a 129522px scroller in a 936px viewport
+// needs ~184 scroll steps, which cannot finish inside the default 120s budget.
+// The only symptom used to be a short file and a warning after the fact.
+test('the doctor warns when a conversation cannot be swept inside its budget', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Very Long</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in a very long conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in a very long conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/very-long' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 129522, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+
+    assert.ok(report.sweep, 'a scrollable conversation gets an estimate');
+    assert.equal(report.sweep.steps, 184);
+    assert.equal(report.sweep.budgetSeconds, 120);
+    // Before the mutation-driven settle this needed 64s at best and did not
+    // fit; the same page now costs about 11s and clears the default budget.
+    assert.ok(report.sweep.estimatedSeconds <= 15, `expected a fast sweep, got ${report.sweep.estimatedSeconds}s`);
+    assert.equal(report.sweep.fitsBudget, true);
+    assert.ok(!report.warnings.some(w => /scroll steps/.test(w)),
+        'a conversation that comfortably fits must not be warned about');
+});
+
+test('the doctor still warns when a conversation genuinely cannot fit its budget', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Enormous</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in an enormous conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in an enormous conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/enormous' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 1000000, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+    assert.equal(report.sweep.fitsBudget, false);
+    assert.ok(report.warnings.some(w => /scroll steps/.test(w) && /maxDuration/.test(w)),
+        'the warning must name the cost and how to raise the budget');
+});
+
+test('a conversation that fits its budget is not warned about', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Short</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in a short conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in a short conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/short' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 6000, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+    assert.equal(report.sweep.fitsBudget, true);
+    assert.ok(!report.warnings.some(w => /scroll steps/.test(w)));
+});
+
+test('the doctor reports each provider against its own turn scope', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'gemini' });
+    assert.equal(report.provider, 'gemini');
+    assert.equal(report.turnSelector.selector, 'user-query, model-response');
+    assert.equal(report.turnSelector.matched, 4, 'Gemini scopes a turn to the message, not to the pair wrapper');
+    assert.equal(report.api, null, 'Gemini has no private-API surface to probe');
+    assert.equal(report.title.value, 'Pair Container');
+});
+
+// Live Gemini (2026-08-18) labels every turn for screen readers with
+// <span class="cdk-visually-hidden screen-reader-user-query-label">You said</span>
+// and an <h2> equivalent for the model. Verified against the live page: exactly
+// one such node per message, nine or twelve characters, nothing else lost.
+test('Gemini screen-reader turn labels never reach the export', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Etiquetas - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query>
+                <span class="cdk-visually-hidden screen-reader-user-query-label">You said</span>
+                <div class="query-text">ayudame a escribir un mensaje para el equipo.</div>
+            </user-query>
+            <model-response>
+                <h2 class="cdk-visually-hidden screen-reader-model-response-label ng-star-inserted">Gemini said</h2>
+                <message-content><div class="response-container">
+                    <p>Propuesta de redacción para el segundo mensaje.</p>
+                </div></message-content>
+            </model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/labels' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'gemini', format: 'markdown'
+    });
+    const exported = engine.serializers.markdown(conversation);
+
+    assert.equal(conversation.messages.length, 2);
+    assert.ok(!exported.includes('You said'), 'the reader never sees this label; nor should the file');
+    assert.ok(!exported.includes('Gemini said'));
+    assert.match(exported, /ayudame a escribir un mensaje para el equipo\./);
+    assert.match(exported, /Propuesta de redacción para el segundo mensaje\./);
+    assert.equal(conversation.title, 'Etiquetas', 'and the vendor suffix still goes');
+});
+
+test('a Gemini pair wrapper is not mistaken for a turn', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 4, 'each user-query and model-response is its own turn');
+    assert.deepEqual(conversation.messages.map(message => message.sender), ['You', 'Gemini', 'You', 'Gemini']);
+
+    assert.match(conversation.messages[0].content, /First question about the deployment pipeline\./);
+    assert.ok(!conversation.messages[0].content.includes('First answer'),
+        'a question must not absorb the answer sharing its container');
+    assert.match(conversation.messages[1].content, /First answer describing the deployment pipeline\./);
+    assert.ok(!conversation.messages[1].content.includes('First question'),
+        'an answer must not be prefixed with its own question');
+
+    // Both messages in a pair would otherwise collapse to one key and the
+    // second would be dropped as already seen.
+    const keys = [...dom.window.document.querySelectorAll('user-query, model-response')]
+        .map(element => engine.internals.messageKey(element, engine.providers.gemini));
+    assert.equal(new Set(keys).size, 4, 'every message in a pair gets a distinct identity');
+});
+
+// Live Gemini (2026-08-17) renders its model picker with a class matching
+// [class*="conversation-title"]. The cascade hit it and v0.9.4 exported a
+// conversation titled "Flash-Lite" while the tab held the real name.
+test('a title selector matching page chrome cannot outrank the tab title', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Quarterly Planning Notes - Google Gemini</title></head><body><main>
+        <div class="conversation-title-button">Flash-Lite</div>
+        <div class="conversation-container">
+            <user-query><div class="query-text">What did we agree on for Q3 headcount?</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>You agreed to hold headcount flat through Q3.</p>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/model-picker' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.title, 'Quarterly Planning Notes',
+        'the model picker is page chrome; the tab carries the conversation name');
+    assert.ok(!conversation.title.includes('Flash-Lite'));
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'gemini' });
+    assert.equal(report.title.value, 'Quarterly Planning Notes');
+    assert.equal(report.title.selectorCandidate, null,
+        'the selector that matched the model picker is gone, not merely outranked');
+});
+
+// ChatGPT still keeps [class*="conversation-title"] in its cascade: it matches
+// nothing on the live site today, and there is no evidence its tab title is the
+// better source. The doctor is what makes that bet visible if it ever goes bad.
+test('the doctor flags a title selector that disagrees with the tab', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Migration Runbook</title></head><body><main>
+        <div class="conversation-title-pill">GPT-5 Thinking</div>
+        <div data-message-author-role="user"><p>Walk me through the migration runbook.</p></div>
+        <div data-message-author-role="assistant"><p>Start by draining the write queue.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/title-drift' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+
+    assert.match(report.title.selectorCandidate, /GPT-5 Thinking/);
+    assert.equal(report.title.documentTitle, 'Migration Runbook');
+    assert.ok(report.warnings.some(w => /one of them is page chrome/.test(w)),
+        'a selector disagreeing with the tab is exactly how the Gemini model-picker bug shipped');
+});
+
+test('Gemini titles and filenames drop the vendor suffix the tab carries', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(dom.window.document.title, 'Pair Container - Google Gemini');
+    assert.equal(conversation.title, 'Pair Container',
+        'every Gemini titleSelector misses live, so the tab title is the source — minus Google\'s suffix');
+    assert.match(engine.serializers.markdown(conversation), /^# Pair Container\n/);
+});
+
+test('ChatGPT keeps its own turn scope after the provider refactor', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Turn Scope</title></head><body><main>
+        <section data-testid="conversation-turn-2">
+            <div data-message-author-role="user" data-message-id="m1"></div>
+            <img src="https://example.com/sketch.png" alt="sketch.png">
+        </section>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/turn-scope' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 1,
+        'media beside an empty role node is still reached through the turn wrapper (issue #33)');
+    assert.match(conversation.messages[0].content, /!\[sketch\.png\]\(https:\/\/example\.com\/sketch\.png\)/);
+});
+
+test('Gemini markdown exporter uses current selectors and rich content extraction', async () => {
+    const { content } = await runExporter(
+        'gemini-exporter-markdown.js',
+        geminiFixture(),
+        'https://gemini.google.com/app/test-fixture'
+    );
+
+    assert.match(content, /### \*\*You\*\*/);
+    assert.match(content, /### \*\*Gemini\*\*/);
+    assert.match(content, /```python\nprint\("hello"\)\nprint\("world"\)\n```/);
+    assert.match(content, /\| Tool \| Status \|/);
+    assert.match(content, /\[Gemini home\]\(https:\/\/gemini\.google\.com\/\)/);
+    assert.match(content, /\[Canvas or chart\]/);
+});
+
+test('shared engine serializes live-observed Gemini custom elements from synthetic fixture', () => {
+    const dom = new JSDOM(readFixture('gemini-live-shapes.html'), {
+        url: 'https://gemini.google.com/app/live-shapes'
+    });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages[0].sender, 'You');
+    assert.equal(result.messages[1].sender, 'Gemini');
+
+    const content = result.messages[1].content;
+    assert.match(content, /## Gemini Audit/);
+    assert.match(content, /```javascript\nfunction audit\(\) \{\n  return "gemini";\n\}\n```/);
+    assert.match(content, /\| Provider \| Shape \| Status \|/);
+    assert.match(content, /1\. First ordered item/);
+    assert.match(content, /\[Gemini app\]\(https:\/\/gemini\.google\.com\/app\)/);
+    assert.match(content, /\[Canvas or chart\]/);
+    assert.match(content, /\[File: gemini-notes\.txt\]/);
+});
+
+function citationsFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Citations Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Summarize the coverage and include your sources for everything please.</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <p>Recent reporting from
+                <a href="https://news.example.com/story?utm_source=chatgpt.com" target="_blank">news.example.com</a>
+                confirms the change, echoed in the paper below.
+            </p>
+            <div class="citation-list">
+                <a href="https://research.example.org/paper">Deep Research Paper</a>
+                <a href="https://news.example.com/story?utm_source=chatgpt.com">duplicate pill</a>
+            </div>
+            <p>Unrelated inline links like <a href="https://plain.example.net/docs">plain docs</a> stay inline-only.</p>
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
+test('assistant citations are appended as a References list (issue #27)', () => {
+    const dom = new JSDOM(citationsFixture(), { url: 'https://chatgpt.com/c/citations' });
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    const content = result.messages[1].content;
+    assert.match(content, /\*\*References:\*\*/);
+    assert.match(content, /1\. \[news\.example\.com\]\(https:\/\/news\.example\.com\/story\?utm_source=chatgpt\.com\)/);
+    assert.match(content, /2\. \[Deep Research Paper\]\(https:\/\/research\.example\.org\/paper\)/);
+    assert.equal(content.match(/news\.example\.com\/story/g).length, 3,
+        'inline pill, duplicate pill inline, and one reference entry');
+    assert.doesNotMatch(content, /3\. \[/);
+    assert.doesNotMatch(content, /References:[\s\S]*plain\.example\.net/,
+        'ordinary links must not be promoted to references');
+
+    const userContent = result.messages[0].content;
+    assert.doesNotMatch(userContent, /References:/);
+});
+
+test('citation references render as an ordered list in HTML exports', () => {
+    const dom = new JSDOM(citationsFixture(), { url: 'https://chatgpt.com/c/citations' });
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'html'
+    });
+
+    const content = result.messages[1].content;
+    assert.match(content, /<div class="references"><strong>References:<\/strong><ol>/);
+    assert.match(content, /<li><a href="https:\/\/research\.example\.org\/paper">Deep Research Paper<\/a><\/li>/);
+});
+
+function installVirtualizedConversation(window, totalMessages, options = {}) {
+    const { document } = window;
+    const scroller = document.createElement('div');
+    scroller.id = 'scroller';
+    scroller.style.overflowY = 'auto';
+    document.body.appendChild(scroller);
+
+    const MESSAGE_HEIGHT = 100;
+    // Steps of 0.75 * clientHeight overlap, so a narrow viewport is what makes
+    // each stop show a fresh set of turns — as a long ChatGPT answer does.
+    const CLIENT_HEIGHT = options.clientHeight || 300;
+    let scrollTop = 0;
+
+    let renders = 0;
+    // Node identity survives being scrolled out of view, as it does in a real
+    // virtualizer — content rendered once stays rendered.
+    const nodes = new Map();
+    const seenOnce = new Set();
+
+    const nodeFor = i => {
+        if (!nodes.has(i)) {
+            const message = document.createElement('div');
+            message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
+            message.setAttribute('data-message-id', `msg-${i}`);
+            const top = i * MESSAGE_HEIGHT;
+            message.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
+            nodes.set(i, message);
+        }
+        const message = nodes.get(i);
+
+        const fill = () => {
+            if (message.firstChild) return;
+            const paragraph = document.createElement('p');
+            paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
+            message.appendChild(paragraph);
+        };
+
+        // ChatGPT mounts the turn container before its text renders, so a turn
+        // scrolled into view is an empty shell for a moment and then fills in
+        // where it stands — no further scrolling involved. The turns already on
+        // screen when the export starts are rendered.
+        if (options.mountLatency && i >= 3 && !seenOnce.has(i)) {
+            seenOnce.add(i);
+            window.setTimeout(fill, options.mountLatency);
+            return message;
+        }
+        fill();
+        return message;
+    };
+
+    const render = () => {
+        renders += 1;
+        while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
+        for (let i = 0; i < totalMessages; i++) {
+            const top = i * MESSAGE_HEIGHT;
+            const inWindow = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
+            // ChatGPT leaves the turns from the previous scroll position mounted
+            // for a moment after jumping to the top.
+            const stale = options.staleBottomRenders
+                && renders <= options.staleBottomRenders
+                && i >= totalMessages - 3;
+            if (!inWindow && !stale) continue;
+            scroller.appendChild(nodeFor(i));
+        }
+    };
+
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalMessages * MESSAGE_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT, configurable: true });
+    // Real virtualizers swap rendered turns for shorter placeholders, which can
+    // drag scrollTop backwards after a programmatic scroll (scroll anchoring).
+    let writes = 0;
+    Object.defineProperty(scroller, 'scrollTop', {
+        get: () => scrollTop,
+        set(value) {
+            const clamped = Math.max(0, Math.min(value, totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT));
+            writes += 1;
+            scrollTop = options.anchorJumpEvery && writes % options.anchorJumpEvery === 0
+                ? Math.max(0, clamped - (options.anchorJumpBy || MESSAGE_HEIGHT * 2))
+                : clamped;
+            render();
+        }
+    });
+
+    render();
+    return scroller;
+}
+
+test('messages sharing a long opening are both kept', () => {
+    // Dedupe used to key on the first 160 characters, so a conversation of
+    // redrafts — every one opening with the same letter boilerplate — lost all
+    // but the first, silently.
+    const opening = 'Asunto: Solicitud de revision de calificacion. Estimados senores del comite academico, me dirijo a ustedes con el fin de solicitar formalmente la revision de la evaluacion correspondiente al periodo actual, conforme al reglamento vigente.';
+    assert.ok(opening.length > 160);
+
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Redrafts</title></head><body><main>
+    <div data-message-author-role="user"><p>Draft the letter for me please</p></div>
+    <div data-message-author-role="assistant"><p>${opening} Version one, please review the first paragraph.</p></div>
+    <div data-message-author-role="user"><p>Rewrite the closing paragraph</p></div>
+    <div data-message-author-role="assistant"><p>${opening} Version two, with the closing paragraph rewritten.</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/redrafts' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 4, 'two answers with the same opening are different messages');
+    assert.match(conversation.messages[1].content, /Version one/);
+    assert.match(conversation.messages[3].content, /Version two/);
+});
+
+test('links whose scheme hides behind control characters are dropped', () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Scheme</title></head><body><main>
+    <div data-message-author-role="user"><p>Check these links please</p></div>
+    <div data-message-author-role="assistant"><p>
+        <a href="java&#9;script:alert(1)">tabbed</a>
+        <a href="java&#10;script:alert(2)">newlined</a>
+        <a href=" JavaScript:alert(3)">spaced</a>
+        <a href="https://example.com/safe">safe</a>
+    </p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/scheme' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const answer = conversation.messages[1].content;
+
+    assert.doesNotMatch(answer, /script:/i, 'no scripting scheme survives as a link target');
+    assert.match(answer, /\[safe\]\(https:\/\/example\.com\/safe\)/);
+    ['tabbed', 'newlined', 'spaced'].forEach(label => {
+        assert.match(answer, new RegExp(label), `${label} keeps its text`);
+    });
+});
+
+test('full extraction retries turns that mount before their text renders', async () => {
+    // Observed on live ChatGPT: an export contained turns 1, 6, 7, 8, 9, 10, 11,
+    // 12 of 12. The sweep did reach every turn — but turns mounted empty on
+    // first sight, and marking them "seen" before the capture succeeded retired
+    // them permanently.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Late Content Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/late-content',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages, { mountLatency: 12, clientHeight: 200 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 10
+    });
+
+    assert.equal(full.messages.length, totalMessages, 'a turn seen empty must be retried, not dropped');
+    const order = full.messages.map(message => Number(message.content.match(/Message number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalMessages }, (unused, index) => index));
+});
+
+test('full extraction keeps conversation order when the tail is still mounted', async () => {
+    // Observed on live ChatGPT while exporting from the bottom of a 12-turn
+    // chat: the first capture (taken at the top) also saw the last turns, which
+    // the virtualizer had not unmounted yet, so the export came out as
+    // 1, 2, 8, 9, 10, 11, 12, 3, 4, 5, 6, 7.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Tail Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/tail',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages, { staleBottomRenders: 4 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages);
+    const order = full.messages.map(message => Number(message.content.match(/Message number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalMessages }, (unused, index) => index),
+        'messages must be exported in conversation order, not in capture order');
+    full.messages.forEach((message, index) => {
+        assert.equal(message.index, index, 'indices are renumbered after sorting');
+        assert.equal(message.sender, index % 2 === 0 ? 'You' : 'ChatGPT');
+        assert.equal(Object.prototype.hasOwnProperty.call(message, 'order'), false,
+            'the internal ordering key never reaches the export');
+    });
+});
+
+test('full extraction survives a virtualizer that drags scrollTop backwards', async () => {
+    // Observed on live ChatGPT: a sweep ended after the first screenful and
+    // exported 6 of the conversation's 12 turns, because the step that swapped
+    // rendered turns for placeholders left scrollTop lower than where it
+    // started, which the old sweep read as "bottom reached".
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Anchored Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/anchored',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 30;
+    installVirtualizedConversation(dom.window, totalMessages, { anchorJumpEvery: 3, anchorJumpBy: 260 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages,
+        'every turn is captured even when the container scrolls back on its own');
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index}\\b`), `message ${index} is in order`);
+    });
+});
+
+test('full extraction sweeps virtualized conversations end to end (issues #28, #29)', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Virtualized Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/virtualized',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 30;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    const truncated = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    assert.ok(truncated.messages.length < totalMessages,
+        'single-pass extraction only sees the rendered window');
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages);
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index} `),
+            'messages must stay in conversation order');
+        assert.equal(message.senderType, index % 2 === 0 ? 'user' : 'assistant');
+        assert.equal(message.reliableSender, true);
+    });
+});
+
+test('a sweep cannot run forever, and says so when it gives up', async () => {
+    // A provider whose container never stops growing would hold the page for as
+    // long as the step budget allows.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Endless</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/endless',
+        pretendToBeVisual: true
+    });
+    const scroller = installVirtualizedConversation(dom.window, 40);
+    let growth = 0;
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 4000 + (growth += 100), configurable: true });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 1,
+        maxDuration: 250
+    });
+
+    assert.ok(Date.now() - started < 5000, 'the sweep honours its wall-clock budget');
+    assert.equal(conversation.complete, false, 'an export cut short is reported as incomplete');
+});
+
+test('an export that never read every turn is flagged and announced', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Stuck</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/stuck',
+        pretendToBeVisual: true
+    });
+    installVirtualizedConversation(dom.window, 12);
+    const { window } = dom;
+    installInnerText(window);
+
+    // One turn never renders its text, however long the sweep waits. It lives
+    // outside the scroller so the fixture's re-render cannot sweep it away.
+    const stuck = window.document.createElement('div');
+    stuck.setAttribute('data-message-author-role', 'assistant');
+    stuck.setAttribute('data-message-id', 'msg-stuck');
+    window.document.body.appendChild(stuck);
+
+    const alerts = [];
+    window.alert = message => alerts.push(message);
+    window.URL.createObjectURL = () => 'blob:x';
+    window.URL.revokeObjectURL = () => {};
+    window.HTMLAnchorElement.prototype.click = function click() {};
+
+    const result = await engine.exportConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(result.conversation.complete, false);
+    assert.ok(result.conversation.missedMessages >= 1, 'the unread turn is counted');
+    assert.equal(alerts.length, 1, 'the reader is told the file may be short');
+    assert.match(alerts[0], /may be incomplete/);
+    assert.ok(result.conversation.messages.length >= 12, 'everything readable is still exported');
+});
+
+test('the reader gets their scroll position back even when a sweep throws', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Boom</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/boom',
+        pretendToBeVisual: true
+    });
+    const scroller = installVirtualizedConversation(dom.window, 20);
+    scroller.scrollTop = 900;
+    const parked = scroller.scrollTop;
+
+    let reads = 0;
+    Object.defineProperty(scroller, 'clientHeight', {
+        get() {
+            if (++reads > 4) throw new Error('container went away mid-sweep');
+            return 300;
+        },
+        configurable: true
+    });
+
+    await assert.rejects(() => engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    }), /went away mid-sweep/);
+
+    assert.equal(scroller.scrollTop, parked, 'the conversation is left where the reader had it');
+});
+
+test('a sweep waits for a hidden tab to come back before scrolling', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Hidden</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/hidden',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    let hidden = true;
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden, configurable: true });
+    dom.window.setTimeout(() => { hidden = false; }, 400);
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxDuration: 8000
+    });
+
+    assert.equal(hidden, false);
+    assert.equal(conversation.messages.length, totalMessages, 'nothing is lost to a backgrounded tab');
+    assert.equal(conversation.complete, true);
+});
+
+test('a tab that stays hidden does not eat the export budget waiting', async () => {
+    // Before v0.9.8 the hidden wait ran `while (doc.hidden && !outOfTime())`,
+    // so a backgrounded tab burned the entire maxDuration doing nothing and
+    // raising the budget only bought a longer stall.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Stays Hidden</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/stays-hidden',
+        pretendToBeVisual: true
+    });
+    installVirtualizedConversation(dom.window, 12);
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => true, configurable: true });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxHiddenWait: 200,
+        maxDuration: 10000
+    });
+    const elapsed = Date.now() - started;
+
+    assert.ok(elapsed < 4000, `a permanently hidden tab must not spend the 10s budget waiting (took ${elapsed}ms)`);
+    assert.ok(conversation.messages.length > 0, 'it still exports what is on the page');
+});
+
+test('time spent waiting on a hidden tab is given back to the sweep', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Paused Clock</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/paused-clock',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 24;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    let hidden = true;
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden, configurable: true });
+    dom.window.setTimeout(() => { hidden = false; }, 600);
+
+    // The wait alone would have left ~100ms of a 700ms budget — far less than
+    // the ~600ms of scrolling this conversation needs.
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 30,
+        awaitStreaming: false,
+        maxHiddenWait: 5000,
+        maxDuration: 700
+    });
+
+    assert.equal(hidden, false);
+    assert.equal(conversation.messages.length, totalMessages,
+        'the sweep gets its full budget once the reader comes back');
+});
+
+test('an answer still being written is waited for, not exported half-finished', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Streaming</title></head><body><main>
+    <div data-message-author-role="user"><p>Write me the long version please</p></div>
+    <div data-message-author-role="assistant" id="live"><p>The answer begins here</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/streaming', pretendToBeVisual: true });
+
+    const { window } = dom;
+    const live = window.document.querySelector('#live p');
+    let ticks = 0;
+    const typing = window.setInterval(() => {
+        live.textContent += ` and continues with sentence ${++ticks}.`;
+        if (ticks === 4) window.clearInterval(typing);
+    }, 120);
+
+    const conversation = await engine.extractConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(ticks, 4, 'the sweep waited for the answer to stop growing');
+    assert.match(conversation.messages[1].content, /sentence 4\./, 'the finished answer is what gets exported');
+    assert.equal(conversation.complete, true);
+});
+
+test('a stream that never stops is exported with a warning rather than hanging', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Endless stream</title></head><body><main>
+    <div data-message-author-role="user"><p>Keep going forever please</p></div>
+    <div data-message-author-role="assistant" id="live"><p>Still writing</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/endless-stream', pretendToBeVisual: true });
+
+    const { window } = dom;
+    const live = window.document.querySelector('#live p');
+    const typing = window.setInterval(() => { live.textContent += ' more'; }, 20);
+
+    const conversation = await engine.extractConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxDuration: 600
+    });
+    window.clearInterval(typing);
+
+    assert.equal(conversation.complete, false, 'a cut-off answer is not passed off as complete');
+    assert.ok(conversation.messages.length >= 1);
+});
+
+test('Gemini conversations sweep through their virtualized scroller too', async () => {
+    // The Gemini exporter goes through the same async path, but Gemini marks
+    // turns up as custom elements with no message ids.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Gemini thread</title></head><body></body></html>', {
+        url: 'https://gemini.google.com/app/abc123',
+        pretendToBeVisual: true
+    });
+    const { window, window: { document } } = dom;
+
+    const scroller = document.createElement('infinite-scroller');
+    scroller.style.overflowY = 'auto';
+    document.body.appendChild(scroller);
+
+    const TURN_HEIGHT = 100;
+    const CLIENT_HEIGHT = 300;
+    const totalTurns = 16;
+    let scrollTop = 0;
+    const render = () => {
+        while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
+        for (let i = 0; i < totalTurns; i++) {
+            const top = i * TURN_HEIGHT;
+            if (!(top < scrollTop + CLIENT_HEIGHT && top + TURN_HEIGHT > scrollTop)) continue;
+            const turn = document.createElement(i % 2 === 0 ? 'user-query' : 'model-response');
+            turn.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + TURN_HEIGHT, height: TURN_HEIGHT, left: 0, right: 100, width: 100 });
+            const body = document.createElement(i % 2 === 0 ? 'div' : 'message-content');
+            body.className = i % 2 === 0 ? 'query-text' : 'markdown';
+            body.textContent = `Gemini turn number ${i} with enough body text to be exported.`;
+            turn.appendChild(body);
+            scroller.appendChild(turn);
+        }
+    };
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalTurns * TURN_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'scrollTop', {
+        get: () => scrollTop,
+        set(value) {
+            scrollTop = Math.max(0, Math.min(value, totalTurns * TURN_HEIGHT - CLIENT_HEIGHT));
+            render();
+        },
+        configurable: true
+    });
+    render();
+
+    const single = engine.extractConversation({ document, provider: 'gemini', format: 'markdown' });
+    assert.ok(single.messages.length < totalTurns, 'a single pass only sees the rendered window');
+
+    const full = await engine.extractConversationFull({
+        document,
+        provider: 'gemini',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalTurns, 'every Gemini turn is captured');
+    const order = full.messages.map(message => Number(message.content.match(/turn number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalTurns }, (unused, index) => index));
+    assert.deepEqual(full.messages.map(m => m.sender).slice(0, 4), ['You', 'Gemini', 'You', 'Gemini']);
+    assert.equal(full.complete, true);
+});
+
+test('full extraction without a scrollable container matches single-pass output', async () => {
+    const dom = new JSDOM(chatGptFixture(), { url: 'https://chatgpt.com/c/static' });
+    const single = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.deepEqual(full.messages.map(m => m.content), single.messages.map(m => m.content));
+});
