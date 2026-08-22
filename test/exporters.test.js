@@ -1109,7 +1109,8 @@ test('ChatGPT payload enrichment adds timestamps, attachments, generated files, 
 
     assert.equal(conversation.messages[1].timestampIso, new Date(1781030880 * 1000).toISOString());
     assert.match(conversation.messages[1].content, /\[File: ABC_Workbook\.xlsx\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
-    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.match(conversation.messages[1].content,
+        /<small><strong>Reasoning \/ progress:<\/strong><br>\nChecked workbook formulas and output paths\.<\/small>/);
     assert.ok(requested.some(url => url.includes('/backend-api/files/download/file-image-api')),
         'image bytes are embedded from the authenticated file endpoint');
     assert.equal(conversation.metadataStatus, 'enriched');
@@ -1211,7 +1212,8 @@ test('a 404 "conversation_inaccessible" is an auth failure, not a missing conver
     assert.equal(conversation.metadataStatus, 'enriched',
         'the page bearer token must be used, not waited for behind a 401 that never comes');
     assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
-    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.match(conversation.messages[1].content,
+        /<small><strong>Reasoning \/ progress:<\/strong><br>\nChecked workbook formulas and output paths\.<\/small>/);
 
     const unauthenticated = backend.conversationCalls().filter(call => !call.headers.Authorization);
     assert.equal(unauthenticated.length, 0,
@@ -1334,6 +1336,56 @@ test('Markdown is read from the payload without touching the page', async () => 
         'every message carries the payload timestamp');
 });
 
+test('payload reasoning progress is folded into the final response, not exported as separate turns', async () => {
+    // Reasoning models store these updates in the active payload chain as
+    // assistant/text messages, but ChatGPT renders them inside the final
+    // response's "Worked for…" disclosure rather than as conversation turns.
+    const payload = payloadWithMessages(['r1', 'r2', 'r3', 'r4', 'r5', 'r6']);
+    const shapes = [
+        ['user', 'Design the workflow architecture.'],
+        ['assistant', 'I’ll compare the possible runtime boundaries first.'],
+        ['assistant', 'The architecture is converging on a smaller core.'],
+        ['assistant', '# Final design\n\nKeep the portable boundary small.'],
+        ['user', 'Now simplify the update model.'],
+        ['assistant', 'Use a deterministic three-way merge.']
+    ];
+    shapes.forEach(([role, text], index) => {
+        const message = payload.mapping[`node-r${index + 1}`].message;
+        message.author.role = role;
+        message.content.parts = [text];
+    });
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.equal(conversation.expectedMessages, 4);
+    assert.match(conversation.messages[1].content, /# Final design/);
+    assert.match(conversation.messages[1].content, /<small><strong>Reasoning \/ progress:<\/strong>/);
+    assert.match(conversation.messages[1].content, /I’ll compare the possible runtime boundaries first\./);
+    assert.match(conversation.messages[1].content, /The architecture is converging on a smaller core\./);
+    assert.ok(conversation.messages[1].content.indexOf('Reasoning / progress:') <
+        conversation.messages[1].content.indexOf('# Final design'),
+    'progress is placed immediately before the answer it led to');
+    assert.equal(conversation.messages.filter(message => message.senderType === 'assistant').length, 2,
+        'progress stays inside its final answer instead of becoming extra turns');
+
+    const withoutReasoning = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        awaitStreaming: false,
+        includeReasoning: false
+    });
+    assert.doesNotMatch(withoutReasoning.messages[1].content, /Reasoning \/ progress:/);
+    assert.doesNotMatch(withoutReasoning.messages[1].content, /I’ll compare/);
+});
+
 test('ChatGPT citation markers become sources, not private-use garbage', async () => {
     // Live payloads wrap citation markers in U+E200…U+E201. Rendered naively
     // they appear as "citeturn1search0" mid-sentence.
@@ -1386,6 +1438,37 @@ test('stripping citation markers never eats ordinary punctuation', async () => {
     assert.match(body, /one-line digest beat grep-based search in the Pre-Registered study\./,
         `hyphens must survive marker stripping, got: ${body}`);
     assert.ok(!/[\uE200-\uE20F]/.test(body), 'the marker itself is gone');
+});
+
+test('non-citation payload references never remove spaces from an answer', async () => {
+    // Current ChatGPT payloads can attach non-web bookkeeping references to a
+    // model response. One observed shape uses a literal space as matched_text
+    // and has no items. Treating every content_reference as a citation used to
+    // evaluate split(' ').join('') over the whole response.
+    const payload = payloadWithMessages(['s1', 's2']);
+    payload.mapping['node-s2'].message.content.parts = [
+        '# File reconciliation and hot evolution\n\n' +
+        'The system must not silently invent and run an unvalidated capability provider midway through a live Run.\n\n' +
+        '```text\nLocal divergence is stored as one ordered patch series\n```'
+    ];
+    payload.mapping['node-s2'].message.metadata.content_references = [{
+        matched_text: ' ',
+        type: 'non_web_reference',
+        items: []
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.match(body, /^# File reconciliation and hot evolution/m);
+    assert.match(body, /The system must not silently invent and run an unvalidated capability provider midway through a live Run\./);
+    assert.match(body, /Local divergence is stored as one ordered patch series/);
+    assert.doesNotMatch(body, /Thesystemmustnot|Localdivergenceisstored/);
 });
 
 test('an image-only turn survives the payload path', async () => {
@@ -2255,9 +2338,40 @@ test('a title selector matching page chrome cannot outrank the tab title', async
         'the selector that matched the model picker is gone, not merely outranked');
 });
 
-// ChatGPT still keeps [class*="conversation-title"] in its cascade: it matches
-// nothing on the live site today, and there is no evidence its tab title is the
-// better source. The doctor is what makes that bet visible if it ever goes bad.
+test('ChatGPT answer headings never become the conversation title', () => {
+    // Long virtualized conversations mount only a moving window of turns. The
+    // first h1 here could therefore be any answer heading — the supplied page
+    // produced both "Final architecture" and "Revised design" depending on
+    // scroll position, while the tab consistently held the real name.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Dynamic Workflow Triggers</title></head><body><main>
+        <div data-message-author-role="assistant"><div class="markdown">
+            <h1>Final architecture</h1><p>The strongest design has three layers.</p>
+        </div></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/title-from-tab' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+
+    assert.equal(conversation.title, 'Dynamic Workflow Triggers');
+    assert.match(conversation.messages[0].content, /# Final architecture/,
+        'the answer heading remains content; it just is not promoted to the file title');
+
+    const genericTab = new JSDOM(`<!DOCTYPE html><html><head><title>ChatGPT</title></head><body><main>
+        <div data-message-author-role="assistant"><div class="markdown">
+            <h1>Final architecture</h1><p>The strongest design has three layers.</p>
+        </div></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/generic-title' });
+    const genericConversation = engine.extractConversation({
+        document: genericTab.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    assert.equal(genericConversation.title, 'Conversation with ChatGPT',
+        'even a generic tab title must not make an answer heading look like conversation metadata');
+});
+
+// ChatGPT keeps the selector cascade as a diagnostic and as a fallback for a
+// generic tab title. When it disagrees with a usable tab title, the tab wins
+// and the doctor still exposes the disagreement.
 test('the doctor flags a title selector that disagrees with the tab', async () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Migration Runbook</title></head><body><main>
         <div class="conversation-title-pill">GPT-5 Thinking</div>
