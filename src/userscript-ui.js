@@ -23,12 +23,33 @@
     // Milliseconds between share-control scans while the page mutates.
     const DEFAULT_SYNC_INTERVAL = 400;
 
+    // Fixed geometry for renderIcon: [tag, attributes] per shape.
     const ICONS = {
-        share: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
-        link: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
-        markdown: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M7 15V9l3 3 3-3v6"/><path d="m16 12 2 2 2-2"/></svg>',
-        pdf: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 16h6M9 12h3"/></svg>',
-        download: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 20h16"/></svg>'
+        share: [
+            ['circle', { cx: '18', cy: '5', r: '3' }],
+            ['circle', { cx: '6', cy: '12', r: '3' }],
+            ['circle', { cx: '18', cy: '19', r: '3' }],
+            ['path', { d: 'm8.6 13.5 6.8 4M15.4 6.5l-6.8 4' }]
+        ],
+        link: [
+            ['path', { d: 'M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1' }],
+            ['path', { d: 'M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1' }]
+        ],
+        markdown: [
+            ['path', { d: 'M4 6h16v12H4z' }],
+            ['path', { d: 'M7 15V9l3 3 3-3v6' }],
+            ['path', { d: 'm16 12 2 2 2-2' }]
+        ],
+        pdf: [
+            ['path', { d: 'M6 2h9l5 5v15H6z' }],
+            ['path', { d: 'M14 2v6h6' }],
+            ['path', { d: 'M9 16h6M9 12h3' }]
+        ],
+        download: [
+            ['path', { d: 'M12 3v12' }],
+            ['path', { d: 'm7 11 5 5 5-5' }],
+            ['path', { d: 'M4 20h16' }]
+        ]
     };
 
     function normalizeText(element) {
@@ -39,20 +60,20 @@
         return Boolean(element && element.getClientRects().length);
     }
 
-    // ChatGPT ships a Trusted Types policy on some deployments, where assigning
-    // innerHTML throws. DOMParser is not a Trusted Types sink, so icons are
-    // parsed out-of-document and imported as nodes instead.
-    function renderIcon(doc, markup) {
-        try {
-            const parsed = new doc.defaultView.DOMParser().parseFromString(markup, 'image/svg+xml');
-            const svg = parsed.documentElement;
-            if (svg && String(svg.nodeName).toLowerCase() === 'svg') {
-                return doc.importNode(svg, true);
-            }
-        } catch (error) {
-            console.warn('[Chat Exporter] Could not render an icon; falling back to text.', error);
-        }
-        return null;
+    // DOMParser is also a Trusted Types sink. Build our fixed SVG geometry
+    // directly so strict policies need no parser, HTML string, or exception.
+    function renderIcon(doc, shapes) {
+        const namespace = 'http://www.w3.org/2000/svg';
+        const svg = doc.createElementNS(namespace, 'svg');
+        const attributes = { width: '18', height: '18', viewBox: '0 0 24 24',
+            fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'aria-hidden': 'true' };
+        Object.entries(attributes).forEach(([key, value]) => svg.setAttribute(key, value));
+        shapes.forEach(([tag, attributes]) => {
+            const shape = doc.createElementNS(namespace, tag);
+            Object.entries(attributes).forEach(([key, value]) => shape.setAttribute(key, value));
+            svg.appendChild(shape);
+        });
+        return svg;
     }
 
     function closeShareMenu(doc) {
@@ -286,9 +307,11 @@
 
     // Message turns carry their own share controls — live ChatGPT renders
     // `share-prompt-link-turn-action-button` inside
-    // `section[data-testid="conversation-turn-N"]`. Those share the current
-    // message, not the conversation, and must keep their native behaviour.
-    const TURN_CONTAINER = '[data-message-author-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
+    // `section[data-testid="conversation-turn-N"]`, and the 2026 transcript
+    // puts a "Share" action in every `li[data-message-role]`. Those share the
+    // current message, not the conversation, and must keep their native
+    // behaviour.
+    const TURN_CONTAINER = '[data-message-author-role], [data-message-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
 
     // The data-testid hook works on every ChatGPT locale; the English text
     // match is a fallback for DOM revisions that drop the testid.

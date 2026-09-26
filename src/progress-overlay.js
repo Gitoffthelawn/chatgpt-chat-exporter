@@ -33,11 +33,14 @@
 
     const PHASE_LABEL = {
         start: 'Preparing export…',
+        payload: 'Downloading conversation… large chats can take up to a minute',
+        rendering: 'Preparing messages and attachments…',
+        attachments: 'Embedding images…',
         streaming: 'Waiting for the answer to finish…',
         hidden: 'Paused — bring this tab to the front',
         resumed: 'Resuming…',
         sweep: 'Reading conversation…',
-        metadata: 'Adding timestamps and attachments…',
+        metadata: 'Adding timestamps, attachments and any missed messages…',
         done: 'Export complete'
     };
 
@@ -199,6 +202,7 @@
                 if (event.complete === false) {
                     parts.status.textContent = event.unreachedMessages
                         ? `Incomplete — ${formatCount(event.unreachedMessages)} message(s) never loaded`
+                        : event.unresolvedReports ? `Incomplete — ${formatCount(event.unresolvedReports)} research report(s) unavailable`
                         : 'Finished, but this export may be incomplete';
                     parts.bar.style.background = '#f59e0b';
                 } else {
